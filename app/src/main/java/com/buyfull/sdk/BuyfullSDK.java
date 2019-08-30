@@ -30,7 +30,6 @@ import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.FloatBuffer;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
@@ -207,7 +206,7 @@ public class BuyfullSDK {
                     }
                     float pcmDB_start = 0;
                     try {
-                        pcmDB_start = getDB(pcm, pcm.length, sampleRate, 1,16,false);
+                        pcmDB_start = getDB(pcm, pcm.length, sampleRate, RECORD_CHANNEL,RECORD_BITS,false);
                     } catch (Exception e) {
                         _safeCallBack(callback,pcmDB_start,null, e,true);
                     }
@@ -219,18 +218,16 @@ public class BuyfullSDK {
                         return;
                     }
 
-                    int postBodySize = 0;
+                    byte[] binData = null;
                     try {
-                        postBodySize = buildBin(pcm,_postBuffer, sampleRate, recordPeriodInMS,1,16);
+                        binData = buildBin(pcm, sampleRate, recordPeriodInMS,RECORD_CHANNEL,RECORD_BITS);
                     } catch (Exception e) {
                         _safeCallBack(callback,dB,null, e,true);
                     }
 
                     String rawJson = null;
                     try {
-                        byte[] postBody = new byte[postBodySize];
-                        System.arraycopy(postBody,0,_postBuffer.array(),0,postBodySize);
-                        rawJson = detectRequest(postBody,_appKey,_token,_isSandbox,_deviceInfo,_phone,_userID,customData);
+                        rawJson = detectRequest(binData,_appKey,_token,_isSandbox,_deviceInfo,_phone,_userID,customData);
                     } catch (Exception e) {
                         _safeCallBack(callback,dB,null, e,true);
                     }
@@ -291,21 +288,17 @@ public class BuyfullSDK {
                 }
             }
         }
-        ByteBuffer pcmByte = ByteBuffer.wrap(pcmData, startIndex, pcmDataSize - startIndex);
+        ByteBuffer pcmByte = ByteBuffer.wrap(pcmData, startIndex, pcmDataSize - startIndex).order(ByteOrder.LITTLE_ENDIAN);
 
-        float[] re = real.asFloatBuffer().array();
-        float[] im = imag.asFloatBuffer().array();
-        Arrays.fill(re,0);
-        Arrays.fill(im,0);
-        if (bits == 16){
-            short[] pcmShort = pcmByte.asShortBuffer().array();
-            for (int index = 0;index < stepCount;++index,startIndex += channels){
-                re[index] = (float) (pcmShort[startIndex] / 32768.0);
-            }
-        }else{
-            float[] pcmFloat = pcmByte.asFloatBuffer().array();
-            for (int index = 0;index < stepCount;++index,startIndex += channels){
-                re[index] = pcmFloat[startIndex];
+        float[] re = real;
+        float[] im = imag;
+        Arrays.fill(re,0,stepCount,0);
+        Arrays.fill(im,0,stepCount,0);
+        for (int index = 0;index < stepCount;++index,startIndex += stepSize){
+            if (bits == 16){
+                re[index] = (float)(pcmByte.getShort(startIndex)/32768.0);
+            }else{
+                re[index] = pcmByte.getFloat(startIndex);
             }
         }
         window_hanning(re, stepCount);
@@ -331,14 +324,13 @@ public class BuyfullSDK {
     /**
      * 将纯pcm采样处理，提取18k-20k音频，返回的BIN用于detect，参数指定源pcm数据格式, 录音时长一定要大于1.2秒,超出会截取最后1.2秒
      * @param pcmData       纯PCM数据，无WAV文件头
-     * @param outBin        输出BIN文件
      * @param sampleRate    44100或48000
      * @param channels      1 (单声道)或 2 (双声道交织)
      * @param bits          16 (Short)或 32 (Float)
-     * @return 处理后的二进制长度
+     * @return 压缩后的bin文件
      */
-    public int buildBin(byte[] pcmData, ByteBuffer outBin, int sampleRate, int recordPeriodInMS, int channels, int bits) throws Exception{
-        if (pcmData == null || outBin == null){
+    public byte[] buildBin(byte[] pcmData, int sampleRate, int recordPeriodInMS, int channels, int bits) throws Exception{
+        if (pcmData == null){
             throw (new Exception("invalid pcmData or outBin:"));
         }
         int pcmDataSize = pcmData.length;
@@ -346,8 +338,8 @@ public class BuyfullSDK {
         int stepSize = channels * (bits / 8);
         int resultSize = stepCount / 8;
 
-        if (outBin.capacity() < (resultSize + 12)){
-            throw (new Exception("outBin is too small"));
+        if (_binBuffer.capacity() < (resultSize + 12)){
+            throw (new Exception("pcmData is too big"));
         }
         int startIndex = 0;
         if (!(sampleRate == 44100 || sampleRate == 48000)){
@@ -364,21 +356,17 @@ public class BuyfullSDK {
                 startIndex += (pcmDataSize - minPCMDataSize);
             }
         }
-        ByteBuffer pcmByte = ByteBuffer.wrap(pcmData, startIndex, pcmDataSize - startIndex);
+        ByteBuffer pcmByte = ByteBuffer.wrap(pcmData, startIndex, pcmDataSize - startIndex).order(ByteOrder.LITTLE_ENDIAN);
 
-        float[] re = real.asFloatBuffer().array();
-        float[] im = imag.asFloatBuffer().array();
+        float[] re = real;
+        float[] im = imag;
         Arrays.fill(re,0);
         Arrays.fill(im,0);
-        if (bits == 16){
-            short[] pcmShort = pcmByte.asShortBuffer().array();
-            for (int index = 0;index < stepCount;++index,startIndex += channels){
-                re[index] = (float) (pcmShort[startIndex] / 32768.0);
-            }
-        }else{
-            float[] pcmFloat = pcmByte.asFloatBuffer().array();
-            for (int index = 0;index < stepCount;++index,startIndex += channels){
-                re[index] = pcmFloat[startIndex];
+        for (int index = 0;index < stepCount;++index,startIndex += stepSize){
+            if (bits == 16){
+                re[index] = (float)(pcmByte.getShort(startIndex)/32768.0);
+            }else{
+                re[index] = pcmByte.getFloat(startIndex);
             }
         }
 
@@ -389,22 +377,24 @@ public class BuyfullSDK {
             s = 24064;
         }
 
-        System.arraycopy(re,0,re,s,4096);
-        System.arraycopy(im,0,im,s,4096);
+        System.arraycopy(re,s,re,0,4096);
+        System.arraycopy(im,s,im,0,4096);
         Arrays.fill(re,4096,N_WAVE,0);
         Arrays.fill(im,4096,N_WAVE,0);
         fft(re,im,13,1);
 
-        outBin.clear();
-        outBin.limit(resultSize + 12);
+        _binBuffer.clear();
+        _binBuffer.limit(resultSize + 12);
         if (sampleRate == 44100){
-            outBin.putInt(1);
+            _binBuffer.putInt(1);
         }else{
-            outBin.putInt(2);
+            _binBuffer.putInt(2);
         }
-        compress(re, outBin, resultSize);
+        resultSize = compress(re, _binBuffer, resultSize);
 
-        return outBin.position();
+        byte[] result = new byte[resultSize];
+        System.arraycopy(_binBuffer.array(),0,result,0,resultSize);
+        return result;
     }
 
     /**
@@ -612,12 +602,12 @@ public class BuyfullSDK {
 
     private volatile static BuyfullSDK      instance;
     private static float                    fsin[];
-    private ByteBuffer                      real;
-    private ByteBuffer                      imag;
+    private float[]                         real;
+    private float[]                         imag;
     private LooperThread                    _notifyThread;
     private volatile boolean                _threadStarted;
     private ByteBuffer                      _recordBuffer;
-    private ByteBuffer                      _postBuffer;
+    private ByteBuffer _binBuffer;
     private volatile boolean                _isDetecting;
     private volatile boolean                _isInitingToken;
     private volatile boolean                _hasMicphonePermission;
@@ -688,13 +678,13 @@ public class BuyfullSDK {
 
     private BuyfullSDK(){
         _recordBuffer = ByteBuffer.allocateDirect(200 * 1024).order(ByteOrder.LITTLE_ENDIAN);
-        _postBuffer = ByteBuffer.allocate(8 * 1024).order(ByteOrder.LITTLE_ENDIAN);
+        _binBuffer = ByteBuffer.allocate(8 * 1024).order(ByteOrder.LITTLE_ENDIAN);
     }
 
     private void init(){
         fsin = new float[N_WAVE];
-        real = ByteBuffer.allocate(N_WAVE * 4);
-        imag = ByteBuffer.allocate(N_WAVE * 4);
+        real = new float[N_WAVE];
+        imag = new float[N_WAVE];
 
         for (int i=0; i<N_WAVE; i++){
             fsin[i] = (float)Math.sin(2*Pi/N_WAVE*i);
@@ -728,7 +718,7 @@ public class BuyfullSDK {
         fsin = null;
         real = null;
         imag = null;
-        _postBuffer = null;
+        _binBuffer = null;
         _recordBuffer = null;
     }
 
@@ -814,6 +804,9 @@ public class BuyfullSDK {
         _userID = info[1];
     }
 
+    private static final float THRESHOLD_DB = -150;
+    private static final int THRESHOLD_DELAY = 1000;
+
     private class RecordConfig{
         public int index;
         public int src;
@@ -830,22 +823,22 @@ public class BuyfullSDK {
 
             float power_score = 0;
             if (power > 0){
-                power_score = 50;
-            }else if (power < -150){
+                power_score = 70;
+            }else if (power < THRESHOLD_DB){
                 power_score = 0;
             }else{
-                power_score = ((150 + power) / 150) * 50;
+                power_score = ((-THRESHOLD_DB + power) / -THRESHOLD_DB) * 70;
             }
 
             float start_score = 0;
             if (delayTime <= 0){
-                start_score = 50;
-            }else if (delayTime >= 1000){
+                start_score = 30;
+            }else if (delayTime >= THRESHOLD_DELAY){
                 start_score = 0;
             }else{
-                start_score = ((1000 - delayTime) / 1000) * 50;
+                start_score = (float) (((THRESHOLD_DELAY - delayTime) * 30.0) / THRESHOLD_DELAY);
             }
-
+//            Log.d(TAG,tag + " : power score is: " + power_score + " | start_score is: " + start_score + " fail score is: " + fail_score);
             return power_score + start_score + fail_score;
         }
     }
@@ -853,9 +846,11 @@ public class BuyfullSDK {
     private RecordConfig _sortedConfigs[];
 
     private Comparator<RecordConfig> _recordConfigComparator;
-    private static int RECORD_CONFIG_COUNT = 4;
-    private static int TEST_PERIOD = 400;
-    private static int RECORD_PERIOD = 1100; //录音时长ms
+    private static int RECORD_CONFIG_COUNT = 5;
+    private static final int TEST_PERIOD = 400;
+    private static final int RECORD_PERIOD = 1100; //录音时长ms
+    private static final int RECORD_CHANNEL = 1;
+    private static final int RECORD_BITS = 16;
 
     private int _recordTestIndex = 0;
     private int _preferSampleRate = 44100;
@@ -865,11 +860,12 @@ public class BuyfullSDK {
             return;
 
         if (Build.VERSION.SDK_INT < 24){
-            RECORD_CONFIG_COUNT = 3;
+            RECORD_CONFIG_COUNT = 4;
         }else{
             if (Build.VERSION.SDK_INT > 17){
                 AudioManager audioManager = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
                 String samplerateString = audioManager.getProperty(AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE);
+                Log.d(TAG,"samplerate is :" + samplerateString);
                 try{
                     int sampleRate = Integer.parseInt(samplerateString);
                     if (sampleRate == 48000){
@@ -880,7 +876,7 @@ public class BuyfullSDK {
                 }
                 String supportUnprocessed = audioManager.getProperty(AudioManager.PROPERTY_SUPPORT_AUDIO_SOURCE_UNPROCESSED);
                 if (supportUnprocessed == null || supportUnprocessed.isEmpty()){
-                    RECORD_CONFIG_COUNT = 3;
+                    RECORD_CONFIG_COUNT = 4;
                 }
             }
         }
@@ -898,14 +894,17 @@ public class BuyfullSDK {
         _recordConfigs[0].src = MediaRecorder.AudioSource.MIC;
         _recordConfigs[1].src = MediaRecorder.AudioSource.CAMCORDER;
         _recordConfigs[2].src = MediaRecorder.AudioSource.VOICE_RECOGNITION;
+        _recordConfigs[3].src = MediaRecorder.AudioSource.VOICE_COMMUNICATION;
 
         _recordConfigs[0].tag = "MIC";
         _recordConfigs[1].tag = "CAMCORDER";
         _recordConfigs[2].tag = "VOICE_RECOGNITION";
+        _recordConfigs[3].tag = "VOICE_COMMUNICATION";
 
-        if (RECORD_CONFIG_COUNT > 3){
-            _recordConfigs[3].src = MediaRecorder.AudioSource.UNPROCESSED;
-            _recordConfigs[3].tag = "UNPROCESSED";
+        if (RECORD_CONFIG_COUNT > 4){
+            _recordConfigs[4].src = MediaRecorder.AudioSource.UNPROCESSED;
+            _recordConfigs[4].tag = "UNPROCESSED";
+
         }
 
         _recordConfigComparator = new Comparator<RecordConfig>() {
@@ -948,7 +947,7 @@ public class BuyfullSDK {
         if (audioSource < 0){
             recordIndex = _sortedConfigs[0].index;
             audioSource = _recordConfigs[recordIndex].src;
-            Log.d("audio rec", "select audio: " + _recordConfigs[recordIndex].tag + " , power is: " + _recordConfigs[recordIndex].power);
+//            Log.d("audio rec", "select audio: " + _recordConfigs[recordIndex].tag + " , power is: " + _recordConfigs[recordIndex].power);
         }
 
         RecordConfig config = _recordConfigs[recordIndex];
@@ -956,7 +955,7 @@ public class BuyfullSDK {
             recordPeriod = config.duration;
         }
 
-        if (config.delayTime >= 1000){
+        if (config.delayTime >= THRESHOLD_DELAY){
             _safeRecordCallBack(callback,LIMIT_DB,null,0  ,  0,new Exception("record use:"+ config.tag + " is not available"));
             return;
         }
@@ -1002,7 +1001,7 @@ public class BuyfullSDK {
         }
 
         long startTimeStamp = System.currentTimeMillis();
-        int expectReadSize = (realSampleRate * recordPeriod * 2 )/ 1000;
+        int expectReadSize = (realSampleRate * recordPeriod * (RECORD_BITS / 8) )/ 1000;
         _recordBuffer.clear();
         int readsize = 0;
         try{
@@ -1026,9 +1025,9 @@ public class BuyfullSDK {
             _safeRecordCallBack(callback,LIMIT_DB,null,0  ,  0,new Exception("record use:"+ config.tag + " record fail"));
         }else{
             byte[] result = new byte[expectReadSize];
-            System.arraycopy(result,0,_recordBuffer.array(),0,expectReadSize);
+            System.arraycopy(_recordBuffer.array(),0,result,0,expectReadSize);
             try {
-                float dB = getDB(result, expectReadSize, realSampleRate,1,16,true);
+                float dB = getDB(result, expectReadSize, realSampleRate,RECORD_CHANNEL,RECORD_BITS,true);
                 _safeRecordCallBack(callback,dB,result,realSampleRate ,  recordPeriod,null);
             } catch (Exception e) {
                 e.printStackTrace();
@@ -1052,14 +1051,14 @@ public class BuyfullSDK {
         RecordConfig config = _recordConfigs[recordIndex];
         AudioRecord record = null;
         try{
-            record = new AudioRecord(audioSource, _preferSampleRate,AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT,16 * 1024);
+            record = new AudioRecord(audioSource, _preferSampleRate,AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT, 10 *1024);
             if (record.getState() != AudioRecord.STATE_INITIALIZED){
-                _setTestResult(1000,-150,true);
+                _setTestResult(THRESHOLD_DELAY,THRESHOLD_DB,true);
                 _record(source, duration, callback);
                 return;
             }
         }catch (Exception e){
-            _setTestResult(1000,-150,true);
+            _setTestResult(THRESHOLD_DELAY,THRESHOLD_DB,true);
             _record(source, duration, callback);
             return;
         }
@@ -1067,20 +1066,20 @@ public class BuyfullSDK {
 
         int realSampleRate = record.getSampleRate();
         if (realSampleRate != _preferSampleRate){
-            _setTestResult(1000,-150,true);
+            _setTestResult(THRESHOLD_DELAY,THRESHOLD_DB,true);
             _record(source, duration, callback);
             return;
         }
         try{
             record.startRecording();
         }catch (Exception e){
-            _setTestResult(1000,-150,true);
+            _setTestResult(THRESHOLD_DELAY,THRESHOLD_DB,true);
             _record(source, duration, callback);
             return;
         }
 
         if (record.getRecordingState() != RECORDSTATE_RECORDING){
-            _setTestResult(1000,-150,true);
+            _setTestResult(THRESHOLD_DELAY,THRESHOLD_DB,true);
             _record(source, duration, callback);
             return;
         }
@@ -1090,21 +1089,38 @@ public class BuyfullSDK {
         int readsize = 0;
         int offset = 0;
         float lastDB = 0;
+        float totalDB = 0;
+        float loudestDB = -9999999;
+        int loudestDBOffset = 0;
+        int dBCount = 0;
+        int validDBCount = 0;
+        int READ_SIZE = 1024 * RECORD_CHANNEL * (RECORD_BITS / 8);
         _recordBuffer.clear();
-        _recordBuffer.limit(2048);
+        _recordBuffer.mark();
+        _recordBuffer.limit(READ_SIZE);
 
         while ((System.currentTimeMillis() - startTimeStamp) < recordPeriod){
             try{
-                readsize = record.read(_recordBuffer, 2048);
+                _recordBuffer.reset();
+                readsize = record.read(_recordBuffer, READ_SIZE);
                 if (readsize <= 0){
                     offset = readsize;
                     break;
                 }
                 offset += readsize;
                 byte[] pcm = _recordBuffer.array();
-                lastDB = getDB(pcm, 2048, realSampleRate,1,16,true);
+                lastDB = getDB(pcm, READ_SIZE, realSampleRate,RECORD_CHANNEL,RECORD_BITS,true);
+                totalDB += lastDB;
+                ++dBCount;
                 if (lastDB > LIMIT_DB){
-                    break;
+                    if (lastDB > loudestDB){
+                        loudestDB = lastDB;
+                        loudestDBOffset = offset;
+                    }
+                    ++validDBCount;
+                    if (validDBCount >= 3){
+                        break;
+                    }
                 }
             }catch (Exception e){
                 e.printStackTrace();
@@ -1122,10 +1138,11 @@ public class BuyfullSDK {
         }catch (Exception e){
 
         }
-        if (offset < 0){
-            _setTestResult(1000,-150,true);
+        if (offset < 0 || validDBCount <= 0){
+            _setTestResult(THRESHOLD_DELAY,THRESHOLD_DB,true);
         }else{
-            _setTestResult(offset * 1000 / realSampleRate,lastDB,false);
+            lastDB = totalDB / dBCount;
+            _setTestResult(loudestDBOffset * 1000 / realSampleRate,lastDB,false);
         }
         _record(source, duration, callback);
     }
@@ -1152,9 +1169,9 @@ public class BuyfullSDK {
         ++_recordTestIndex;
 
         if (_hasTestFinished()){
-            for (int index = 0;index < RECORD_CONFIG_COUNT;++index){
-                Log.d("audio rec", "test result: " + _recordConfigs[index].tag + " | " + _recordConfigs[index].power + " | " + _recordConfigs[index].delayTime);
-            }
+//            for (int index = 0;index < RECORD_CONFIG_COUNT;++index){
+//                Log.d("audio rec", "test result: " + _recordConfigs[index].tag + " | " + _recordConfigs[index].power + " | " + _recordConfigs[index].delayTime);
+//            }
             Arrays.sort(_sortedConfigs, _recordConfigComparator);
         }
         return _hasTestFinished();
@@ -1265,7 +1282,7 @@ public class BuyfullSDK {
                     result = -128;
                 output.putChar((char)result);
             }
-            return 8 + numberOfSamples;
+            return output.position();
         }catch (Exception e){
             return 0;
         }
