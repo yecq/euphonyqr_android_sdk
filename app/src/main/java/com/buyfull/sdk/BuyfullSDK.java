@@ -4,7 +4,10 @@ import android.Manifest;
 import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.pm.PackageManager;
+import android.media.AudioFormat;
+import android.media.AudioManager;
 import android.media.AudioRecord;
+import android.media.MediaRecorder;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
@@ -30,14 +33,15 @@ import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+import static android.media.AudioRecord.RECORDSTATE_RECORDING;
+
 public class BuyfullSDK {
     private static final  String TAG = "BUYFULLSDK";
-    private static final  int   RECORD_SAMPLE_RATE = 44100; //默认录音采样率
-    private static final  float RECORD_PERIOD = 1.2f; //录音时长
     private static final  float LIMIT_DB = -120f; //分贝阈值，低于此值不上传判断
 
     public interface IDetectCallback {
@@ -57,7 +61,7 @@ public class BuyfullSDK {
          * @param pcm       纯PCM数据
          * @param error     如果有错误则不为空
          */
-        void onRecord(final float dB,final byte[] pcm,final Exception error);
+        void onRecord(final float dB,final byte[] pcm,final int sampleRate,final int recordPeriodInMS, final Exception error);
     }
 
     public synchronized static BuyfullSDK getInstance(){
@@ -185,7 +189,7 @@ public class BuyfullSDK {
             _isDetecting = true;
             record(new IRecordCallback() {
                 @Override
-                public void onRecord(float dB, byte[] pcm, Exception error) {
+                public void onRecord(float dB, byte[] pcm,int sampleRate,int recordPeriodInMS, Exception error) {
                     if (error != null){
                         _safeCallBack(callback,dB,null, error,true);
                         return;
@@ -194,6 +198,7 @@ public class BuyfullSDK {
                         _safeCallBackFail(callback,dB,"record fail", true);
                         return;
                     }
+                    //检测分贝数，太低了说明很可能是没信号，后续不检测
                     if (dB <= LIMIT_DB){
                         Log.d(TAG, "pcm db is " + dB);
                         Log.d(TAG,"Almost no signal, return");
@@ -202,10 +207,42 @@ public class BuyfullSDK {
                     }
                     float pcmDB_start = 0;
                     try {
-                        pcmDB_start = getDB(pcm, RECORD_SAMPLE_RATE, 1,16,false);
+                        pcmDB_start = getDB(pcm, pcm.length, sampleRate, 1,16,false);
                     } catch (Exception e) {
                         _safeCallBack(callback,pcmDB_start,null, e,true);
                     }
+                    //检测分贝数，太低了说明很可能是没信号，后续不检测
+                    if (pcmDB_start <= LIMIT_DB){
+                        Log.d(TAG, "pcm db is " + pcmDB_start);
+                        Log.d(TAG,"Almost no signal, return");
+                        _safeCallBack(callback,pcmDB_start,null, null,true);
+                        return;
+                    }
+
+                    int postBodySize = 0;
+                    try {
+                        postBodySize = buildBin(pcm,_postBuffer, sampleRate, recordPeriodInMS,1,16);
+                    } catch (Exception e) {
+                        _safeCallBack(callback,dB,null, e,true);
+                    }
+
+                    String rawJson = null;
+                    try {
+                        byte[] postBody = new byte[postBodySize];
+                        System.arraycopy(postBody,0,_postBuffer.array(),0,postBodySize);
+                        rawJson = detectRequest(postBody,_appKey,_token,_isSandbox,_deviceInfo,_phone,_userID,customData);
+                    } catch (Exception e) {
+                        _safeCallBack(callback,dB,null, e,true);
+                    }
+
+                    String jsonResult = null;
+                    try {
+                        jsonResult = handleJSONResult(rawJson);
+                    } catch (Exception e) {
+                        _safeCallBack(callback,dB,null, e,true);
+                    }
+
+                    _safeCallBack(callback,dB,jsonResult,null,true);
                 }
             });
         }
@@ -217,11 +254,7 @@ public class BuyfullSDK {
      */
     public void record(IRecordCallback callback){
         if (callback == null)   return;
-        if (isDetecting()){
-            callback.onRecord(LIMIT_DB,null, new Exception("don't call record while detecting"));
-            return;
-        }
-        Message msg = _notifyThread.mHandler.obtainMessage(START_RECORD, -1, (int) (RECORD_PERIOD * 1000),callback);
+        Message msg = _notifyThread.mHandler.obtainMessage(START_RECORD, -1, -1,callback);
         msg.sendToTarget();
     }
 
@@ -233,13 +266,11 @@ public class BuyfullSDK {
      * @param bits          16 (Short)或 32 (Float)
      * @param isLastFrame   采样PCM头部还是尾部
      * @return              分贝
-     * @throws Exception
      */
-    public float getDB(byte[] pcmData, int sampleRate, int channels, int bits, boolean isLastFrame) throws Exception{
+    public float getDB(byte[] pcmData, int pcmDataSize, int sampleRate, int channels, int bits, boolean isLastFrame) throws Exception{
         if (pcmData == null){
             throw (new Exception("invalid pcmData or outBin:"));
         }
-        int pcmDataSize = pcmData.length;
         int stepCount = 1024;
         int stepSize = channels * (bits / 8);
         int startIndex = 0;
@@ -251,7 +282,7 @@ public class BuyfullSDK {
             throw (new Exception("invalid bit count:" + bits));
         }else{
             int minPCMDataSize = stepCount * stepSize;
-            if (pcmDataSize < (sampleRate * stepSize)){
+            if (pcmDataSize < minPCMDataSize){
                 throw (new Exception("invalid pcmData length:" + pcmDataSize));
             }else{
                 startIndex += (pcmDataSize - minPCMDataSize);
@@ -262,8 +293,8 @@ public class BuyfullSDK {
         }
         ByteBuffer pcmByte = ByteBuffer.wrap(pcmData, startIndex, pcmDataSize - startIndex);
 
-        float[] re = ((FloatBuffer)(real.asFloatBuffer().limit(stepCount))).array();
-        float[] im = ((FloatBuffer)(imag.asFloatBuffer().limit(stepCount))).array();
+        float[] re = real.asFloatBuffer().array();
+        float[] im = imag.asFloatBuffer().array();
         Arrays.fill(re,0);
         Arrays.fill(im,0);
         if (bits == 16){
@@ -305,14 +336,13 @@ public class BuyfullSDK {
      * @param channels      1 (单声道)或 2 (双声道交织)
      * @param bits          16 (Short)或 32 (Float)
      * @return 处理后的二进制长度
-     * @throws Exception
      */
-    public int buildBin(byte[] pcmData, ByteBuffer outBin, int sampleRate, int channels, int bits) throws Exception{
+    public int buildBin(byte[] pcmData, ByteBuffer outBin, int sampleRate, int recordPeriodInMS, int channels, int bits) throws Exception{
         if (pcmData == null || outBin == null){
             throw (new Exception("invalid pcmData or outBin:"));
         }
         int pcmDataSize = pcmData.length;
-        int stepCount = (int) (sampleRate * RECORD_PERIOD);
+        int stepCount = (sampleRate * recordPeriodInMS) / 1000;
         int stepSize = channels * (bits / 8);
         int resultSize = stepCount / 8;
 
@@ -383,7 +413,6 @@ public class BuyfullSDK {
      * @param appkey        请在动听官网申请，并询问动听工作人员
      * @param isSandbox     如果是在sandbox.euphonyqr.com申请的appkey为true，否则为false
      * @return              token
-     * @throws Exception
      */
     public String requestToken(String tokenURL, String appkey, boolean isSandbox) throws Exception{
         if (tokenURL == null || appkey == null){
@@ -438,7 +467,6 @@ public class BuyfullSDK {
      * @param userID            可为空
      * @param customData        可为空
      * @return JSON结果
-     * @throws Exception
      */
     public String detectRequest(byte[] binData, String appkey, String token, boolean isSandbox, String deviceInfo, String phone, String userID, String customData) throws Exception{
         if (binData == null || binData.length <= 0 || appkey == null || deviceInfo == null){
@@ -479,6 +507,7 @@ public class BuyfullSDK {
             connection.connect();
             OutputStream outputStream = connection.getOutputStream();
             outputStream.write(binData,0,binData.length);
+            outputStream.flush();
             outputStream.close();
 
             int code = connection.getResponseCode();
@@ -509,7 +538,6 @@ public class BuyfullSDK {
      * 处理服务器返回的原始JSON，加入一些辅助数据
      * @param rawJSON       服务器返回的原始JSON
      * @return              处理后的JSON，可能为空
-     * @throws Exception
      */
     public String handleJSONResult(String rawJSON) throws Exception{
         if (rawJSON == null){
@@ -587,13 +615,12 @@ public class BuyfullSDK {
     private ByteBuffer                      real;
     private ByteBuffer                      imag;
     private LooperThread                    _notifyThread;
-    private AudioRecord                     _recorder;
     private volatile boolean                _threadStarted;
     private ByteBuffer                      _recordBuffer;
     private ByteBuffer                      _postBuffer;
     private volatile boolean                _isDetecting;
     private volatile boolean                _isInitingToken;
-    private volatile boolean _hasMicphonePermission;
+    private volatile boolean                _hasMicphonePermission;
     private String                          _appKey;
     private boolean                         _isSandbox;
     private String                          _tokenURL;
@@ -607,12 +634,7 @@ public class BuyfullSDK {
     private static final int SET_SDKINFO = 3;
     private static final int SET_USER_ID = 4;
     private static final int DETECT = 5;
-    private static final int START_RECORD = 8;
-    private static final int STOP_RECORD = 9;
-
-
-    private static final int START_TEST_RECORD = 15;
-    private static final int STOP_TEST_RECORD = 16;
+    private static final int START_RECORD = 6;
 
     private static class LooperThread extends Thread {
         public Handler mHandler;
@@ -642,6 +664,11 @@ public class BuyfullSDK {
                                 instance._set_user_id((String[])msg.obj);
                             break;
 
+                        case START_RECORD:
+                            if (instance != null)
+                                instance._doRecord(msg.arg1,msg.arg2,(IRecordCallback)msg.obj);
+                            break;
+
                         case DETECT:
                             if (instance != null)
                                 instance._detect((Object[])msg.obj);
@@ -660,9 +687,8 @@ public class BuyfullSDK {
     }
 
     private BuyfullSDK(){
-        _recordBuffer = ByteBuffer.allocateDirect(1024 * 1024).order(ByteOrder.LITTLE_ENDIAN);
+        _recordBuffer = ByteBuffer.allocateDirect(200 * 1024).order(ByteOrder.LITTLE_ENDIAN);
         _postBuffer = ByteBuffer.allocate(8 * 1024).order(ByteOrder.LITTLE_ENDIAN);
-
     }
 
     private void init(){
@@ -740,6 +766,8 @@ public class BuyfullSDK {
         }
 
         if (context != null){
+
+            _initRecordConfig(context);
             PackageManager pkgManager = context.getPackageManager();
             _hasMicphonePermission = pkgManager.checkPermission(Manifest.permission.RECORD_AUDIO, context.getPackageName()) == PackageManager.PERMISSION_GRANTED;
 
@@ -786,14 +814,350 @@ public class BuyfullSDK {
         _userID = info[1];
     }
 
+    private class RecordConfig{
+        public int index;
+        public int src;
+        public int duration;
+        public float power;
+        public int delayTime;
+        public int hasFailed;
+        public String tag;
+        public float getScore(){
+            float fail_score = -hasFailed;
+            if (fail_score < -10) {
+                fail_score = -10;
+            }
+
+            float power_score = 0;
+            if (power > 0){
+                power_score = 50;
+            }else if (power < -150){
+                power_score = 0;
+            }else{
+                power_score = ((150 + power) / 150) * 50;
+            }
+
+            float start_score = 0;
+            if (delayTime <= 0){
+                start_score = 50;
+            }else if (delayTime >= 1000){
+                start_score = 0;
+            }else{
+                start_score = ((1000 - delayTime) / 1000) * 50;
+            }
+
+            return power_score + start_score + fail_score;
+        }
+    }
+    private RecordConfig _recordConfigs[];
+    private RecordConfig _sortedConfigs[];
+
+    private Comparator<RecordConfig> _recordConfigComparator;
+    private static int RECORD_CONFIG_COUNT = 4;
+    private static int TEST_PERIOD = 400;
+    private static int RECORD_PERIOD = 1100; //录音时长ms
+
+    private int _recordTestIndex = 0;
+    private int _preferSampleRate = 44100;
+
+    private void _initRecordConfig(Context context){
+        if (_recordConfigComparator != null)
+            return;
+
+        if (Build.VERSION.SDK_INT < 24){
+            RECORD_CONFIG_COUNT = 3;
+        }else{
+            if (Build.VERSION.SDK_INT > 17){
+                AudioManager audioManager = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
+                String samplerateString = audioManager.getProperty(AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE);
+                try{
+                    int sampleRate = Integer.parseInt(samplerateString);
+                    if (sampleRate == 48000){
+                        _preferSampleRate = 48000;
+                    }
+                }catch (Exception e){
+
+                }
+                String supportUnprocessed = audioManager.getProperty(AudioManager.PROPERTY_SUPPORT_AUDIO_SOURCE_UNPROCESSED);
+                if (supportUnprocessed == null || supportUnprocessed.isEmpty()){
+                    RECORD_CONFIG_COUNT = 3;
+                }
+            }
+        }
+
+        _recordConfigs = new RecordConfig[RECORD_CONFIG_COUNT];
+        _sortedConfigs = new RecordConfig[RECORD_CONFIG_COUNT];
+
+        for (int index = 0;index < RECORD_CONFIG_COUNT;++index){
+            _recordConfigs[index] = new RecordConfig();
+            _recordConfigs[index].index = index;
+            _recordConfigs[index].duration = TEST_PERIOD;
+            _sortedConfigs[index] = _recordConfigs[index];
+        }
+
+        _recordConfigs[0].src = MediaRecorder.AudioSource.MIC;
+        _recordConfigs[1].src = MediaRecorder.AudioSource.CAMCORDER;
+        _recordConfigs[2].src = MediaRecorder.AudioSource.VOICE_RECOGNITION;
+
+        _recordConfigs[0].tag = "MIC";
+        _recordConfigs[1].tag = "CAMCORDER";
+        _recordConfigs[2].tag = "VOICE_RECOGNITION";
+
+        if (RECORD_CONFIG_COUNT > 3){
+            _recordConfigs[3].src = MediaRecorder.AudioSource.UNPROCESSED;
+            _recordConfigs[3].tag = "UNPROCESSED";
+        }
+
+        _recordConfigComparator = new Comparator<RecordConfig>() {
+            @Override
+            public int compare(RecordConfig o1, RecordConfig o2) {
+                float score1 = o1.getScore();
+                float score2 = o2.getScore();
+                if (score1 > score2)
+                    return -1;
+                else if (score1 < score2)
+                    return 1;
+                return 0;
+            }
+        };
+    }
+
     private void _record(int source, int duration, IRecordCallback callback){
         if (callback == null)   return;
         Message msg = _notifyThread.mHandler.obtainMessage(START_RECORD, source, duration,callback);
         msg.sendToTarget();
     }
 
-    private void _doRecord(int source, int duration, IRecordCallback callback){
+    private void _safeRecordCallBack(IRecordCallback callback, float dB, byte[] pcm, int sampleRate, int recordPeriodInMS,  Exception error){
+        try{
+            callback.onRecord(dB,pcm,sampleRate,recordPeriodInMS,error);
+        }catch (Exception e){
+            e.printStackTrace();
+        }
+    }
 
+    private void _doRecord(int source, int duration, IRecordCallback callback){
+        if (!_hasTestFinished()){
+            _doTestRecord(source, duration, callback);
+            return;
+        }
+        int audioSource = source;
+        int recordPeriod = duration;
+
+        int recordIndex = 0;
+        if (audioSource < 0){
+            recordIndex = _sortedConfigs[0].index;
+            audioSource = _recordConfigs[recordIndex].src;
+            Log.d("audio rec", "select audio: " + _recordConfigs[recordIndex].tag + " , power is: " + _recordConfigs[recordIndex].power);
+        }
+
+        RecordConfig config = _recordConfigs[recordIndex];
+        if (recordPeriod <= 0){
+            recordPeriod = config.duration;
+        }
+
+        if (config.delayTime >= 1000){
+            _safeRecordCallBack(callback,LIMIT_DB,null,0  ,  0,new Exception("record use:"+ config.tag + " is not available"));
+            return;
+        }
+
+        AudioRecord record = null;
+        try{
+            record = new AudioRecord(audioSource, _preferSampleRate,AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT,16 * 1024);
+            if (record.getState() != AudioRecord.STATE_INITIALIZED){
+                _safeRecordCallBack(callback,LIMIT_DB,null,0  ,  0,new Exception("record use:"+ config.tag + " init failed1"));
+                return;
+            }
+        }catch (Exception e){
+            _safeRecordCallBack(callback,LIMIT_DB,null,0  ,  0,new Exception("record use:"+ config.tag + " init failed1"));
+            return;
+        }
+
+
+        int realSampleRate = record.getSampleRate();
+        if (realSampleRate != _preferSampleRate){
+            _safeRecordCallBack(callback,LIMIT_DB,null,0  ,  0,new Exception("record use:"+ config.tag + " init failed2"));
+            return;
+        }
+        try{
+            record.startRecording();
+        }catch (Exception e){
+            try {
+                record.stop();
+            }catch (Exception e1){
+
+            }
+            try {
+                record.release();
+            }catch (Exception e2){
+
+            }
+            _safeRecordCallBack(callback,LIMIT_DB,null,0  ,  0,e);
+            return;
+        }
+
+        if (record.getRecordingState() != RECORDSTATE_RECORDING){
+            _safeRecordCallBack(callback,LIMIT_DB,null,0  ,  0,new Exception("record use:"+ config.tag + " start record fail"));
+            return;
+        }
+
+        long startTimeStamp = System.currentTimeMillis();
+        int expectReadSize = (realSampleRate * recordPeriod * 2 )/ 1000;
+        _recordBuffer.clear();
+        int readsize = 0;
+        try{
+            readsize = record.read(_recordBuffer, expectReadSize);
+        }catch (Exception e){
+            e.printStackTrace();
+            readsize = -1;
+        }
+
+        try {
+            record.stop();
+        }catch (Exception e){
+
+        }
+        try {
+            record.release();
+        }catch (Exception e){
+
+        }
+        if (readsize < expectReadSize || ((System.currentTimeMillis() - startTimeStamp) < recordPeriod)){
+            _safeRecordCallBack(callback,LIMIT_DB,null,0  ,  0,new Exception("record use:"+ config.tag + " record fail"));
+        }else{
+            byte[] result = new byte[expectReadSize];
+            System.arraycopy(result,0,_recordBuffer.array(),0,expectReadSize);
+            try {
+                float dB = getDB(result, expectReadSize, realSampleRate,1,16,true);
+                _safeRecordCallBack(callback,dB,result,realSampleRate ,  recordPeriod,null);
+            } catch (Exception e) {
+                e.printStackTrace();
+                _safeRecordCallBack(callback,LIMIT_DB,null,0  ,  0,new Exception("record use:"+ config.tag + " get dB fail"));
+            }
+        }
+    }
+
+    private void _doTestRecord(int source, int duration, IRecordCallback callback){
+        int audioSource = source;
+        int recordPeriod = duration;
+
+        int recordIndex = 0;
+        if (audioSource < 0){
+            recordIndex = _recordTestIndex;
+            audioSource = _recordConfigs[recordIndex].src;
+        }
+        if (recordPeriod <= 0){
+            recordPeriod = _recordConfigs[recordIndex].duration;
+        }
+        RecordConfig config = _recordConfigs[recordIndex];
+        AudioRecord record = null;
+        try{
+            record = new AudioRecord(audioSource, _preferSampleRate,AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT,16 * 1024);
+            if (record.getState() != AudioRecord.STATE_INITIALIZED){
+                _setTestResult(1000,-150,true);
+                _record(source, duration, callback);
+                return;
+            }
+        }catch (Exception e){
+            _setTestResult(1000,-150,true);
+            _record(source, duration, callback);
+            return;
+        }
+
+
+        int realSampleRate = record.getSampleRate();
+        if (realSampleRate != _preferSampleRate){
+            _setTestResult(1000,-150,true);
+            _record(source, duration, callback);
+            return;
+        }
+        try{
+            record.startRecording();
+        }catch (Exception e){
+            _setTestResult(1000,-150,true);
+            _record(source, duration, callback);
+            return;
+        }
+
+        if (record.getRecordingState() != RECORDSTATE_RECORDING){
+            _setTestResult(1000,-150,true);
+            _record(source, duration, callback);
+            return;
+        }
+
+        long startTimeStamp = System.currentTimeMillis();
+
+        int readsize = 0;
+        int offset = 0;
+        float lastDB = 0;
+        _recordBuffer.clear();
+        _recordBuffer.limit(2048);
+
+        while ((System.currentTimeMillis() - startTimeStamp) < recordPeriod){
+            try{
+                readsize = record.read(_recordBuffer, 2048);
+                if (readsize <= 0){
+                    offset = readsize;
+                    break;
+                }
+                offset += readsize;
+                byte[] pcm = _recordBuffer.array();
+                lastDB = getDB(pcm, 2048, realSampleRate,1,16,true);
+                if (lastDB > LIMIT_DB){
+                    break;
+                }
+            }catch (Exception e){
+                e.printStackTrace();
+                offset = -1;
+                break;
+            }
+        }
+        try {
+            record.stop();
+        }catch (Exception e){
+
+        }
+        try {
+            record.release();
+        }catch (Exception e){
+
+        }
+        if (offset < 0){
+            _setTestResult(1000,-150,true);
+        }else{
+            _setTestResult(offset * 1000 / realSampleRate,lastDB,false);
+        }
+        _record(source, duration, callback);
+    }
+
+    private boolean _hasTestFinished(){
+        if (_recordTestIndex == RECORD_CONFIG_COUNT)
+            return true;
+
+        return false;
+    }
+
+    private boolean _setTestResult(int delayTime, float power, boolean hasFailed){
+        if (_hasTestFinished())
+            return true;
+
+        _recordConfigs[_recordTestIndex].delayTime = delayTime;
+        _recordConfigs[_recordTestIndex].power = power;
+        _recordConfigs[_recordTestIndex].duration = RECORD_PERIOD + ((delayTime * 100) / 100);
+        if (hasFailed)
+            ++_recordConfigs[_recordTestIndex].hasFailed;
+        else
+            _recordConfigs[_recordTestIndex].hasFailed = 0;
+
+        ++_recordTestIndex;
+
+        if (_hasTestFinished()){
+            for (int index = 0;index < RECORD_CONFIG_COUNT;++index){
+                Log.d("audio rec", "test result: " + _recordConfigs[index].tag + " | " + _recordConfigs[index].power + " | " + _recordConfigs[index].delayTime);
+            }
+            Arrays.sort(_sortedConfigs, _recordConfigComparator);
+        }
+        return _hasTestFinished();
     }
     //////////////////////////////////////////////////////////////////
     private static int fft(float[] fr, float[] fi, int m, int inv){
