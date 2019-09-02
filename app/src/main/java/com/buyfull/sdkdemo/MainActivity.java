@@ -14,6 +14,11 @@ import android.widget.TextView;
 import com.buyfull.sdk.BuyfullSDK;
 import com.buyfull.sdkdemo.R;
 
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+import org.json.JSONTokener;
+
 //APP要自已申请麦克风权限，申请成功后才能正常调用SDK
 //此DEMO中自带麦请麦克风权限代码，可以自行修改
 public class MainActivity extends AppCompatActivity {
@@ -22,29 +27,50 @@ public class MainActivity extends AppCompatActivity {
     private static final int REQUEST_RECORD_PERMISSION = 200;
 
     private TextView resultText;
+    private String lastReqID;
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+
         checkInit(); //进入程序申请READPHONE权限，实际中可以自行改变
+
         resultText = (TextView)findViewById(R.id.textView);
-        Button test = (Button)findViewById(R.id.button);
+
+        Button test = (Button)findViewById(R.id.button2);
         test.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                checkDetect(); 
+                checkDetect();
             }
-        });
+        });//检测权限，然后开始录音检测
+
+        Button test2 = (Button)findViewById(R.id.button);
+        test2.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                if (lastReqID != null){
+                    BuyfullSDK.getInstance().debugUpload(lastReqID);
+                }
+            }
+        });//检测权限，然后开始录音检测
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
         //test destory
-        BuyfullSDK.destoryInstance();
+        //BuyfullSDK.destoryInstance();
     }
     //检查权限后初始化
     protected void checkInit(){
+        BuyfullSDK sdk = BuyfullSDK.getInstance();
+        // appkey和sandbox请向动听员工询问，tokenURL需要自行布署，此处只是DEMO
+        sdk.setSDKInfo("75ba120532f44aa7a8cd431a2c2a50ef",true,"https://sandbox.buyfull.cc/testycq2/buyfulltoken");
+        // userID或phoneNumber可以做为数据分析标识通过动听后台API返回，请任意设置一个
+        sdk.setUserID("13xxxxxxxxx","custom user id");
+
+        //检测权限
         PackageManager pkgManager = getPackageManager();
         // read phone state用于获取 imei 设备信息
         boolean phoneSatePermission =
@@ -54,7 +80,7 @@ public class MainActivity extends AppCompatActivity {
             ActivityCompat.requestPermissions(this, new String[] {Manifest.permission.READ_PHONE_STATE},
                     REQUEST_PHONE_PERMISSION);
         } else {
-            BuyfullSDK.getInstance().setContext(this);
+            BuyfullSDK.getInstance().setContext(this);//可以重复调用，此方法不会保存context
         }
     }
 
@@ -72,11 +98,28 @@ public class MainActivity extends AppCompatActivity {
                         @Override
                         public void run() {
                             if (error != null){
+                                error.printStackTrace();
                                 resultText.setText(error.getLocalizedMessage());
                             }else if(json == null){
                                 resultText.setText("No detect result, signal dB is:" + dB);
                             }else {
-
+                                Log.d(TAG,json);
+                                try {
+                                    JSONObject jsonObj = (JSONObject) new JSONTokener(json).nextValue();
+                                    lastReqID = jsonObj.getString("reqid");
+                                    int tagCount = jsonObj.getInt("count");
+                                    if (tagCount > 0){
+                                        JSONArray allTags = jsonObj.getJSONArray("allTags");
+                                        resultText.setText("RequestID is:" + lastReqID + "\nTest result is:" + allTags.join(","));
+                                    }else{
+                                        JSONArray sortedResults = jsonObj.getJSONArray("sortByPowerResult");
+                                        JSONObject result1 = sortedResults.getJSONObject(0);
+                                        JSONObject result2 = sortedResults.getJSONObject(1);
+                                        resultText.setText("RequestID is:" + lastReqID + "\nTest result is null, power is (dB):" + result1.getDouble("power") + " | " + result2.getDouble("power"));
+                                    }
+                                } catch (JSONException e) {
+                                    e.printStackTrace();
+                                }
                             }
                         }
                     });
@@ -84,6 +127,7 @@ public class MainActivity extends AppCompatActivity {
             });
         }
     }
+
     //检查权限后开始检测
     private void checkDetect(){
         PackageManager pkgManager = getPackageManager();
@@ -98,22 +142,22 @@ public class MainActivity extends AppCompatActivity {
             doDetect();
         }
     }
-    //请求权限
+    //请求权限的回调
     @Override
     public void onRequestPermissionsResult(int requestCode,
                                            String permissions[], int[] grantResults) {
         //获得权限后请调用一下setContext
         if (requestCode == REQUEST_PHONE_PERMISSION) {
             if ((grantResults.length == 1 && grantResults[0] == PackageManager.PERMISSION_GRANTED)) {
-                BuyfullSDK.getInstance().setContext(this);
+                BuyfullSDK.getInstance().setContext(this);//可以重复调用，此方法不会保存context
             } else {
                 Log.e(TAG, "We highly recommend that you need to grant the special permissions before initializing the SDK, otherwise some "
                         + "functions will not work");
-                BuyfullSDK.getInstance().setContext(this);
+                BuyfullSDK.getInstance().setContext(this);//可以重复调用，此方法不会保存context
             }
         }else if (requestCode == REQUEST_RECORD_PERMISSION) {
             if ((grantResults.length == 1 && grantResults[0] == PackageManager.PERMISSION_GRANTED)) {
-                BuyfullSDK.getInstance().setContext(this);
+                BuyfullSDK.getInstance().setContext(this);//可以重复调用，此方法不会保存context
                 checkDetect();
             } else {
                 Log.e(TAG,"please goto setting and grant record permission");
@@ -125,4 +169,5 @@ public class MainActivity extends AppCompatActivity {
             super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         }
     }
+
 }

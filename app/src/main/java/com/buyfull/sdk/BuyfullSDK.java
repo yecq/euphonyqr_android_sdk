@@ -22,6 +22,7 @@ import org.json.JSONObject;
 import org.json.JSONTokener;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
@@ -50,7 +51,7 @@ public class BuyfullSDK {
          * @param json      检测成功返回JSON数据，可能为空
          * @param error     如果有错误则不为空
          */
-        void onDetect(final float dB,final String json,final Exception error);
+        void onDetect(final float dB, final String json, final Exception error);
     }
 
     public interface IRecordCallback {
@@ -60,7 +61,7 @@ public class BuyfullSDK {
          * @param pcm       纯PCM数据
          * @param error     如果有错误则不为空
          */
-        void onRecord(final float dB,final byte[] pcm,final int sampleRate,final int recordPeriodInMS, final Exception error);
+        void onRecord(final float dB, final byte[] pcm, final int sampleRate, final int recordPeriodInMS, final Exception error);
     }
 
     public synchronized static BuyfullSDK getInstance(){
@@ -199,8 +200,11 @@ public class BuyfullSDK {
                     }
                     //检测分贝数，太低了说明很可能是没信号，后续不检测
                     if (dB <= LIMIT_DB){
-                        Log.d(TAG, "pcm db is " + dB);
-                        Log.d(TAG,"Almost no signal, return");
+                        if (DEBUG){
+                            Log.d(TAG, "pcm db is " + dB);
+                            Log.d(TAG,"Almost no signal, return");
+                        }
+
                         _safeCallBack(callback,dB,null, null,true);
                         return;
                     }
@@ -212,8 +216,11 @@ public class BuyfullSDK {
                     }
                     //检测分贝数，太低了说明很可能是没信号，后续不检测
                     if (pcmDB_start <= LIMIT_DB){
-                        Log.d(TAG, "pcm db is " + pcmDB_start);
-                        Log.d(TAG,"Almost no signal, return");
+                        if (DEBUG){
+                            Log.d(TAG, "pcm db is " + pcmDB_start);
+                            Log.d(TAG,"Almost no signal, return");
+                        }
+
                         _safeCallBack(callback,pcmDB_start,null, null,true);
                         return;
                     }
@@ -290,6 +297,7 @@ public class BuyfullSDK {
         }
         ByteBuffer pcmByte = ByteBuffer.wrap(pcmData, startIndex, pcmDataSize - startIndex).order(ByteOrder.LITTLE_ENDIAN);
 
+        boolean allZero = true;
         float[] re = real;
         float[] im = imag;
         Arrays.fill(re,0,stepCount,0);
@@ -300,7 +308,12 @@ public class BuyfullSDK {
             }else{
                 re[index] = pcmByte.getFloat(startIndex);
             }
+            if (re[index] != 0)
+                allZero = false;
         }
+        if (allZero)
+            return LIMIT_DB;
+
         window_hanning(re, stepCount);
         fft(re,im,10,0);
         int s = 418, l = 45;
@@ -317,6 +330,8 @@ public class BuyfullSDK {
         db /= l;
         db = Math.log(db) * (8.6858896380650365530225783783322);
 
+        if (Double.isInfinite(db) || Double.isNaN(db))
+            return THRESHOLD_DB;
         return (float)db;
 
     }
@@ -383,8 +398,9 @@ public class BuyfullSDK {
         Arrays.fill(im,4096,N_WAVE,0);
         fft(re,im,13,1);
 
+        int finalSize = resultSize + 12;
         _binBuffer.clear();
-        _binBuffer.limit(resultSize + 12);
+        _binBuffer.limit(finalSize);
         if (sampleRate == 44100){
             _binBuffer.putInt(1);
         }else{
@@ -392,8 +408,8 @@ public class BuyfullSDK {
         }
         resultSize = compress(re, _binBuffer, resultSize);
 
-        byte[] result = new byte[resultSize];
-        System.arraycopy(_binBuffer.array(),0,result,0,resultSize);
+        byte[] result = new byte[finalSize];
+        System.arraycopy(_binBuffer.array(),0,result,0,finalSize);
         return result;
     }
 
@@ -433,6 +449,8 @@ public class BuyfullSDK {
                 reader.close();
             }
             connection.disconnect();
+            if (DEBUG)
+                Log.d(TAG,msg);
             return msg;
         }catch (Exception e) {
             error = e;
@@ -482,7 +500,7 @@ public class BuyfullSDK {
             }
             String json = params.toString();
             String cmd = "soundtag-decode/decodev6/Android/BIN/" + toURLEncoded(json);
-            URL url = new URL("https://api.euphonyqr.com/test/api/decode_test?cmd=" + cmd);
+            URL url = new URL("https://testeast.euphonyqr.com/test/api/decode_test?cmd=" + cmd);
             connection = (HttpURLConnection) url.openConnection();
             connection.setRequestMethod("POST");
             connection.setConnectTimeout(1000);
@@ -511,6 +529,8 @@ public class BuyfullSDK {
                 reader.close();
             }
             connection.disconnect();
+            if (DEBUG)
+                Log.d(TAG,msg);
             return msg;
         }catch (Exception e) {
             error = e;
@@ -524,7 +544,24 @@ public class BuyfullSDK {
         return null;
     }
 
-    /**
+    private class DecodeResult{
+        public int channel;
+        public float power;
+    }
+    private Comparator<DecodeResult> _decodeComparator = new Comparator<DecodeResult>() {
+        @Override
+        public int compare(DecodeResult o1, DecodeResult o2) {
+            float score1 = o1.power;
+            float score2 = o2.power;
+            if (score1 > score2)
+                return -1;
+            else if (score1 < score2)
+                return 1;
+            return 0;
+        }
+    };
+
+    /*
      * 处理服务器返回的原始JSON，加入一些辅助数据
      * @param rawJSON       服务器返回的原始JSON
      * @return              处理后的JSON，可能为空
@@ -545,35 +582,25 @@ public class BuyfullSDK {
         JSONArray rawResults = new JSONArray();
         JSONArray sortedResults = new JSONArray();
         JSONArray validResults = new JSONArray();
+        DecodeResult[] decodeResults = new DecodeResult[old_result.length()];
 
-        for (int index = 0;index < old_result.length(); ++index){
+        for (int index = 0;index < old_result.length(); ++index) {
             JSONObject raw_result = old_result.getJSONObject(index);
-            raw_result.put("channel",index);
+            decodeResults[index] = new DecodeResult();
+            decodeResults[index].channel = index;
+            decodeResults[index].power = (float) raw_result.getDouble("power");
+            raw_result.put("channel", index);
             rawResults.put(raw_result);
-            int insertIndex = 0;
-            boolean insert = false;
-            if (sortedResults.length() > 0){
-                double power = raw_result.getDouble("power");
-                for (int index2 = 0;index2 < sortedResults.length();++index2){
-                    double topPower = sortedResults.getJSONObject(index2).getDouble("power");
-                    if (power > topPower){
-                        insertIndex = index2;
-                        insert = true;
-                        break;
-                    }
-                }
-            }
-            if (!insert){
-                sortedResults.put(raw_result);
-            }else{
-                sortedResults.put(insertIndex,raw_result);
-            }
         }
+        Arrays.sort(decodeResults, _decodeComparator);
 
-        for (int index = 0; index < sortedResults.length(); ++index){
-            JSONArray tags = sortedResults.getJSONObject(index).getJSONArray("tags");
+        for (int index = 0; index < decodeResults.length; ++index){
+            int channel = decodeResults[index].channel;
+            JSONObject raw_result = old_result.getJSONObject(channel);
+            sortedResults.put(raw_result);
+            JSONArray tags = raw_result.getJSONArray("tags");
             if (tags.length() > 0){
-                validResults.put(sortedResults.getJSONObject(index));
+                validResults.put(raw_result);
                 for (int index2 = 0;index2 < tags.length();++index2){
                     String tag = tags.getString(index2);
                     if (!validTagset.contains(tag)){
@@ -593,6 +620,65 @@ public class BuyfullSDK {
         result.put("allTags",allTags);
         return result.toString();
     }
+
+    public void debugUpload(String requestID) {
+        if (requestID == null || requestID.isEmpty()) {
+            return;
+        }
+        Message msg = _notifyThread.mHandler.obtainMessage(DEBUG_UPLOAD, requestID);
+        msg.sendToTarget();
+    }
+
+    private String _debugUploadRequest(String requestID){
+        if (requestID == null || requestID.isEmpty()){
+            return "Invalid requestID";
+        }
+        HttpURLConnection connection = null;
+        try {
+            byte[] wav = _buildDebugWav();
+            String cmd = "soundtag-decode/debugupload/" + requestID;
+            URL url = new URL("https://testeast.euphonyqr.com/test/api/decode_test?cmd=" + cmd);
+            connection = (HttpURLConnection) url.openConnection();
+            connection.setRequestMethod("POST");
+            connection.setConnectTimeout(1000);
+            connection.setReadTimeout(1000);
+            connection.setDoOutput(true);
+            connection.setDoInput(true);
+            connection.setUseCaches(false);
+            connection.setInstanceFollowRedirects(false);
+            connection.setRequestProperty("Content-Type","audio/mpeg");
+            connection.setFixedLengthStreamingMode(wav.length);
+
+            connection.connect();
+            OutputStream outputStream = connection.getOutputStream();
+            outputStream.write(wav,0,wav.length);
+            outputStream.flush();
+            outputStream.close();
+
+            int code = connection.getResponseCode();
+            String msg = "";
+            if (code == 200){
+                BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream()));
+                String line = null;
+                while ((line = reader.readLine()) != null) {
+                    msg += line + "\n";
+                }
+                reader.close();
+            }
+            connection.disconnect();
+            if (DEBUG)
+                Log.d(TAG,"debug upload " + requestID + " finished:" + msg);
+            return msg;
+        }catch (Exception e) {
+            e.printStackTrace();
+        } finally {
+            if(connection != null) {
+                connection.disconnect(); //将Http连接关闭掉
+            }
+        }
+        return null;
+    }
+
     ////////////////////////////////////////////////////////////////////////
 
     private static final float Pi = 3.14159265358979f;
@@ -600,14 +686,15 @@ public class BuyfullSDK {
     private static final int LOG2_N_WAVE = (6+10);
     private static final String SDK_VERSION = "1.0.0";
 
+    private static final boolean            DEBUG = true;
     private volatile static BuyfullSDK      instance;
     private static float                    fsin[];
     private float[]                         real;
     private float[]                         imag;
     private LooperThread                    _notifyThread;
     private volatile boolean                _threadStarted;
-    private ByteBuffer                      _recordBuffer;
-    private ByteBuffer _binBuffer;
+    private byte[]                          _recordBuffer;
+    private ByteBuffer                      _binBuffer;
     private volatile boolean                _isDetecting;
     private volatile boolean                _isInitingToken;
     private volatile boolean                _hasMicphonePermission;
@@ -625,6 +712,7 @@ public class BuyfullSDK {
     private static final int SET_USER_ID = 4;
     private static final int DETECT = 5;
     private static final int START_RECORD = 6;
+    private static final int DEBUG_UPLOAD = 100;
 
     private static class LooperThread extends Thread {
         public Handler mHandler;
@@ -664,6 +752,11 @@ public class BuyfullSDK {
                                 instance._detect((Object[])msg.obj);
                             break;
 
+                        case DEBUG_UPLOAD:
+                            if (instance != null)
+                                instance._debugUploadRequest((String)msg.obj);
+                            break;
+
                         case DESTORY:
                         default:
                             Looper.myLooper().quit();
@@ -677,7 +770,7 @@ public class BuyfullSDK {
     }
 
     private BuyfullSDK(){
-        _recordBuffer = ByteBuffer.allocateDirect(200 * 1024).order(ByteOrder.LITTLE_ENDIAN);
+        _recordBuffer = new byte[200 * 1024];
         _binBuffer = ByteBuffer.allocate(8 * 1024).order(ByteOrder.LITTLE_ENDIAN);
     }
 
@@ -790,7 +883,8 @@ public class BuyfullSDK {
             }
         }
         _deviceInfo = deviceInfo.toString();
-        Log.d(TAG,_deviceInfo);
+        if (DEBUG)
+            Log.d(TAG,_deviceInfo);
     }
 
     private void _set_sdk_info(String[] info){
@@ -854,6 +948,7 @@ public class BuyfullSDK {
 
     private int _recordTestIndex = 0;
     private int _preferSampleRate = 44100;
+    private int _lastPCMSize = 0;
 
     private void _initRecordConfig(Context context){
         if (_recordConfigComparator != null)
@@ -865,7 +960,8 @@ public class BuyfullSDK {
             if (Build.VERSION.SDK_INT > 17){
                 AudioManager audioManager = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
                 String samplerateString = audioManager.getProperty(AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE);
-                Log.d(TAG,"samplerate is :" + samplerateString);
+                if (DEBUG)
+                    Log.d(TAG,"samplerate is :" + samplerateString);
                 try{
                     int sampleRate = Integer.parseInt(samplerateString);
                     if (sampleRate == 48000){
@@ -947,7 +1043,8 @@ public class BuyfullSDK {
         if (audioSource < 0){
             recordIndex = _sortedConfigs[0].index;
             audioSource = _recordConfigs[recordIndex].src;
-//            Log.d("audio rec", "select audio: " + _recordConfigs[recordIndex].tag + " , power is: " + _recordConfigs[recordIndex].power);
+            if (DEBUG)
+                Log.d("audio rec", "select audio: " + _recordConfigs[recordIndex].tag + " , power is: " + _recordConfigs[recordIndex].power);
         }
 
         RecordConfig config = _recordConfigs[recordIndex];
@@ -1002,14 +1099,25 @@ public class BuyfullSDK {
 
         long startTimeStamp = System.currentTimeMillis();
         int expectReadSize = (realSampleRate * recordPeriod * (RECORD_BITS / 8) )/ 1000;
-        _recordBuffer.clear();
+        if ((expectReadSize % 2) == 1)
+            --expectReadSize;
+
+        _lastPCMSize = expectReadSize;
+
         int readsize = 0;
-        try{
-            readsize = record.read(_recordBuffer, expectReadSize);
-        }catch (Exception e){
-            e.printStackTrace();
-            readsize = -1;
-        }
+        int offset = 0;
+        do{
+            try{
+                readsize = record.read(_recordBuffer, offset,expectReadSize - offset);
+                if (readsize <= 0){
+                    break;
+                }
+                offset += readsize;
+            }catch (Exception e){
+                e.printStackTrace();
+                readsize = -1;
+            }
+        }while (offset < expectReadSize);
 
         try {
             record.stop();
@@ -1021,11 +1129,12 @@ public class BuyfullSDK {
         }catch (Exception e){
 
         }
-        if (readsize < expectReadSize || ((System.currentTimeMillis() - startTimeStamp) < recordPeriod)){
+        long passedTime = System.currentTimeMillis() - startTimeStamp;
+        if (offset < expectReadSize || (passedTime < recordPeriod) || (passedTime > (recordPeriod + 500))){
             _safeRecordCallBack(callback,LIMIT_DB,null,0  ,  0,new Exception("record use:"+ config.tag + " record fail"));
         }else{
             byte[] result = new byte[expectReadSize];
-            System.arraycopy(_recordBuffer.array(),0,result,0,expectReadSize);
+            System.arraycopy(_recordBuffer,0,result,0,expectReadSize);
             try {
                 float dB = getDB(result, expectReadSize, realSampleRate,RECORD_CHANNEL,RECORD_BITS,true);
                 _safeRecordCallBack(callback,dB,result,realSampleRate ,  recordPeriod,null);
@@ -1095,21 +1204,16 @@ public class BuyfullSDK {
         int dBCount = 0;
         int validDBCount = 0;
         int READ_SIZE = 1024 * RECORD_CHANNEL * (RECORD_BITS / 8);
-        _recordBuffer.clear();
-        _recordBuffer.mark();
-        _recordBuffer.limit(READ_SIZE);
 
         while ((System.currentTimeMillis() - startTimeStamp) < recordPeriod){
             try{
-                _recordBuffer.reset();
-                readsize = record.read(_recordBuffer, READ_SIZE);
+                readsize = record.read(_recordBuffer,0, READ_SIZE);
                 if (readsize <= 0){
                     offset = readsize;
                     break;
                 }
                 offset += readsize;
-                byte[] pcm = _recordBuffer.array();
-                lastDB = getDB(pcm, READ_SIZE, realSampleRate,RECORD_CHANNEL,RECORD_BITS,true);
+                lastDB = getDB(_recordBuffer, READ_SIZE, realSampleRate,RECORD_CHANNEL,RECORD_BITS,true);
                 totalDB += lastDB;
                 ++dBCount;
                 if (lastDB > LIMIT_DB){
@@ -1169,9 +1273,12 @@ public class BuyfullSDK {
         ++_recordTestIndex;
 
         if (_hasTestFinished()){
-//            for (int index = 0;index < RECORD_CONFIG_COUNT;++index){
-//                Log.d("audio rec", "test result: " + _recordConfigs[index].tag + " | " + _recordConfigs[index].power + " | " + _recordConfigs[index].delayTime);
-//            }
+            if (DEBUG){
+                for (int index = 0;index < RECORD_CONFIG_COUNT;++index){
+                    Log.d("audio rec", "test result: " + _recordConfigs[index].tag + " | " + _recordConfigs[index].power + " | " + _recordConfigs[index].delayTime);
+                }
+            }
+
             Arrays.sort(_sortedConfigs, _recordConfigComparator);
         }
         return _hasTestFinished();
@@ -1280,12 +1387,80 @@ public class BuyfullSDK {
                     result = 127;
                 else if (result < -128)
                     result = -128;
-                output.putChar((char)result);
+                output.put((byte)(result));
             }
             return output.position();
         }catch (Exception e){
+            e.printStackTrace();
             return 0;
         }
+    }
+
+    private byte[] _buildDebugWav(){
+        int wavSize = _lastPCMSize + 44;
+        long totalAudioLen = _lastPCMSize;
+        long totalDataLen = totalAudioLen + 36;
+        long longSampleRate = _preferSampleRate;
+        int channels = 1;
+        long byteRate = 16 * longSampleRate * channels / 8;
+        byte[] wav = new byte[wavSize];
+        byte[] header = wav;
+        header[0] = 'R'; // RIFF
+        header[1] = 'I';
+        header[2] = 'F';
+        header[3] = 'F';
+        header[4] = (byte) (totalDataLen & 0xff);//数据大小
+        header[5] = (byte) ((totalDataLen >> 8) & 0xff);
+        header[6] = (byte) ((totalDataLen >> 16) & 0xff);
+        header[7] = (byte) ((totalDataLen >> 24) & 0xff);
+        header[8] = 'W';//WAVE
+        header[9] = 'A';
+        header[10] = 'V';
+        header[11] = 'E';
+        //FMT Chunk
+        header[12] = 'f'; // 'fmt '
+        header[13] = 'm';
+        header[14] = 't';
+        header[15] = ' ';//过渡字节
+        //数据大小
+        header[16] = 16; // 4 bytes: size of 'fmt ' chunk
+        header[17] = 0;
+        header[18] = 0;
+        header[19] = 0;
+        //编码方式 10H为PCM编码格式
+        header[20] = 1; // format = 1
+        header[21] = 0;
+        //通道数
+        header[22] = (byte) channels;
+        header[23] = 0;
+        //采样率，每个通道的播放速度
+        header[24] = (byte) (longSampleRate & 0xff);
+        header[25] = (byte) ((longSampleRate >> 8) & 0xff);
+        header[26] = (byte) ((longSampleRate >> 16) & 0xff);
+        header[27] = (byte) ((longSampleRate >> 24) & 0xff);
+        //音频数据传送速率,采样率*通道数*采样深度/8
+        header[28] = (byte) (byteRate & 0xff);
+        header[29] = (byte) ((byteRate >> 8) & 0xff);
+        header[30] = (byte) ((byteRate >> 16) & 0xff);
+        header[31] = (byte) ((byteRate >> 24) & 0xff);
+        // 确定系统一次要处理多少个这样字节的数据，确定缓冲区，通道数*采样位数
+        header[32] = (byte) (1 * 16 / 8);
+        header[33] = 0;
+        //每个样本的数据位数
+        header[34] = 16;
+        header[35] = 0;
+        //Data chunk
+        header[36] = 'd';//data
+        header[37] = 'a';
+        header[38] = 't';
+        header[39] = 'a';
+        header[40] = (byte) (totalAudioLen & 0xff);
+        header[41] = (byte) ((totalAudioLen >> 8) & 0xff);
+        header[42] = (byte) ((totalAudioLen >> 16) & 0xff);
+        header[43] = (byte) ((totalAudioLen >> 24) & 0xff);
+
+        System.arraycopy(_recordBuffer,0,wav,44,_lastPCMSize);
+        return wav;
     }
 
     private static String toURLEncoded(String paramString) {

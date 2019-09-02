@@ -9,6 +9,7 @@ public class MyApplication extends Application {
     @Override
     public void onCreate() {
         super.onCreate();
+        //建议在app中初始化实例和参数
         BuyfullSDK sdk = BuyfullSDK.getInstance();
         sdk.setContext(getApplicationContext());
         // appkey和sandbox请向动听员工询问，tokenURL需要自行布署，此处只是DEMO
