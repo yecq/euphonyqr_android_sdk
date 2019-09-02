@@ -41,6 +41,7 @@ public class MainActivity extends AppCompatActivity {
         test.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
+                resultText.setText("detecting...");
                 checkDetect();
             }
         });//检测权限，然后开始录音检测
@@ -50,7 +51,10 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onClick(View view) {
                 if (lastReqID != null){
+                    resultText.setText("last record file uploaded");
                     BuyfullSDK.getInstance().debugUpload(lastReqID);
+                }else{
+                    resultText.setText("please detect first");
                 }
             }
         });//检测权限，然后开始录音检测
