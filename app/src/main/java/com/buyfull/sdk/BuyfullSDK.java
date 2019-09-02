@@ -625,7 +625,7 @@ public class BuyfullSDK {
         if (requestID == null || requestID.isEmpty()) {
             return;
         }
-        Message msg = _notifyThread.mHandler.obtainMessage(DEBUG_UPLOAD, requestID);
+        Message msg = _notifyThread.mHandler.obtainMessage(DEBUG_UPLOAD, requestID + "_" + _lastRecordSource);
         msg.sendToTarget();
     }
 
@@ -949,6 +949,7 @@ public class BuyfullSDK {
     private int _recordTestIndex = 0;
     private int _preferSampleRate = 44100;
     private int _lastPCMSize = 0;
+    private String _lastRecordSource = "";
 
     private void _initRecordConfig(Context context){
         if (_recordConfigComparator != null)
@@ -1103,6 +1104,7 @@ public class BuyfullSDK {
             --expectReadSize;
 
         _lastPCMSize = expectReadSize;
+        _lastRecordSource = config.tag;
 
         int readsize = 0;
         int offset = 0;
