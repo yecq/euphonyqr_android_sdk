@@ -312,7 +312,7 @@ public class BuyfullSDK {
                 allZero = false;
         }
         if (allZero)
-            return LIMIT_DB;
+            return THRESHOLD_DB;
 
         window_hanning(re, stepCount);
         fft(re,im,10,0);
