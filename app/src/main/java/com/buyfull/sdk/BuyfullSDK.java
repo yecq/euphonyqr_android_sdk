@@ -22,7 +22,6 @@ import org.json.JSONObject;
 import org.json.JSONTokener;
 
 import java.io.BufferedReader;
-import java.io.ByteArrayOutputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
@@ -41,9 +40,9 @@ import java.util.Set;
 import static android.media.AudioRecord.RECORDSTATE_RECORDING;
 
 public class BuyfullSDK {
-    private static final  String            TAG = "BUYFULLSDK";
-    private static final  float             LIMIT_DB = -120f; //分贝阈值，低于此值不上传判断
-    private static final boolean            DEBUG = false;
+    private static final String     TAG = "BUYFULLSDK";
+    private static final float      LIMIT_DB = -120f; //分贝阈值，低于此值不上传判断
+    private static final boolean    DEBUG = true;
 
     public interface IDetectCallback {
         /**

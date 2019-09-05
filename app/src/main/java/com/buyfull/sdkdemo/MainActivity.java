@@ -1,6 +1,8 @@
 package com.buyfull.sdkdemo;
 
 import android.Manifest;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.support.v4.app.ActivityCompat;
@@ -52,8 +54,11 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onClick(View view) {
                 if (lastReqID != null){
-                    resultText.setText("last record file uploaded");
+                    resultText.setText("RequestID 已经在剪切板中，可以在微信中粘贴给工作人员用做查询");
                     BuyfullSDK.getInstance().debugUpload(lastReqID);
+                    ClipboardManager mClipboardManager = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                    ClipData clipData = ClipData.newPlainText("copy from buyfull sdk", lastReqID);
+                    mClipboardManager.setPrimaryClip(clipData);
                 }else{
                     resultText.setText("please detect first");
                 }
