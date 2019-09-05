@@ -308,10 +308,8 @@ public class BuyfullSDK {
             }else{
                 re[index] = pcmByte.getFloat(startIndex);
             }
-            if (re[index] != 0){
+            if (re[index] != 0)
                 allZero = false;
-                break;
-            }
         }
         if (allZero)
             return THRESHOLD_DB;
