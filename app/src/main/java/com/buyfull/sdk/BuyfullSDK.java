@@ -42,7 +42,7 @@ import static android.media.AudioRecord.RECORDSTATE_RECORDING;
 public class BuyfullSDK {
     private static final String     TAG = "BUYFULLSDK";
     private static final float      LIMIT_DB = -120f; //分贝阈值，低于此值不上传判断
-    private static final boolean    DEBUG = true;
+    private static final boolean    DEBUG = false;
 
     public interface IDetectCallback {
         /**
@@ -500,7 +500,7 @@ public class BuyfullSDK {
             }
             String json = params.toString();
             String cmd = "soundtag-decode/decodev6/Android/BIN/" + toURLEncoded(json);
-            URL url = new URL("https://testeast.euphonyqr.com/test/api/decode_test?cmd=" + cmd);
+            URL url = new URL("https://api.euphonyqr.com/api/decode2?cmd=" + cmd);
             connection = (HttpURLConnection) url.openConnection();
             connection.setRequestMethod("POST");
             connection.setConnectTimeout(1000);
