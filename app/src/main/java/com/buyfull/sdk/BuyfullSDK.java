@@ -940,7 +940,7 @@ public class BuyfullSDK {
 
     private Comparator<RecordConfig> _recordConfigComparator;
     private static int RECORD_CONFIG_COUNT = 5;
-    private static final int TEST_PERIOD = 400;
+    private static final int TEST_PERIOD = 600;
     private static final int RECORD_PERIOD = 1100; //录音时长ms
     private static final int RECORD_CHANNEL = 1;
     private static final int RECORD_BITS = 16;
