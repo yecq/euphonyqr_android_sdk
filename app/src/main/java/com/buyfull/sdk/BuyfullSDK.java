@@ -402,12 +402,18 @@ public class BuyfullSDK {
         _binBuffer.clear();
         _binBuffer.limit(finalSize);
         if (sampleRate == 44100){
-            _binBuffer.putInt(1);
+            _binBuffer.put((byte) 1);
         }else{
-            _binBuffer.putInt(2);
+            _binBuffer.put((byte) 2);
         }
+        _binBuffer.mark();
         resultSize = compress(re, _binBuffer, resultSize);
-
+        if (resultSize > 65535){
+            throw (new Exception("too long bin"));
+        }
+        _binBuffer.reset();
+        _binBuffer.put((byte) 1);
+        _binBuffer.putShort((short) (resultSize & 0xffff));
         byte[] result = new byte[finalSize];
         System.arraycopy(_binBuffer.array(),0,result,0,finalSize);
         return result;
@@ -570,7 +576,15 @@ public class BuyfullSDK {
         if (rawJSON == null){
             return null;
         }
-        JSONObject old_json_result = (JSONObject) new JSONTokener(rawJSON).nextValue();
+        JSONObject old_json_result = null;
+        try{
+            old_json_result = (JSONObject) new JSONTokener(rawJSON).nextValue();
+        }catch (Exception e){
+            Log.d(TAG,"server return invalid result:" + rawJSON);
+            e.printStackTrace();
+            return null;
+        }
+
         JSONArray old_result = old_json_result.getJSONArray("result");
         String requestID = old_json_result.getString("reqid");
         if (old_result == null || requestID == null || requestID.isEmpty()){
