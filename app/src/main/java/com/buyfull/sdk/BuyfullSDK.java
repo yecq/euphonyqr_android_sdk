@@ -401,17 +401,18 @@ public class BuyfullSDK {
         int finalSize = resultSize + 12;
         _binBuffer.clear();
         _binBuffer.limit(finalSize);
-        if (sampleRate == 44100){
-            _binBuffer.put((byte) 1);
-        }else{
-            _binBuffer.put((byte) 2);
-        }
         _binBuffer.mark();
+        _binBuffer.position(4);
         resultSize = compress(re, _binBuffer, resultSize);
         if (resultSize > 65535){
             throw (new Exception("too long bin"));
         }
         _binBuffer.reset();
+        if (sampleRate == 44100){
+            _binBuffer.put((byte) 1);
+        }else{
+            _binBuffer.put((byte) 2);
+        }
         _binBuffer.put((byte) 1);
         _binBuffer.putShort((short) (resultSize & 0xffff));
         byte[] result = new byte[finalSize];
@@ -1406,7 +1407,7 @@ public class BuyfullSDK {
                     result = -128;
                 output.put((byte)(result));
             }
-            return output.position();
+            return numberOfSamples + 8;
         }catch (Exception e){
             e.printStackTrace();
             return 0;
