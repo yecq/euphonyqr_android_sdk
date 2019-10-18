@@ -6,7 +6,7 @@ import com.buyfull.sdk.BuyfullSDK;
 
 public class MyApplication extends Application {
     public static final String appKey = "75ba120532f44aa7a8cd431a2c2a50ef";
-    public static final String tokenURL = "https://sandbox.buyfull.cc/testycq2/buyfulltoken";
+    public static final String tokenURL = "https://sandbox.euphonyqr.com/testycq2/buyfulltoken";
     public static final boolean isSandbox = true;
     @Override
     public void onCreate() {
