@@ -262,6 +262,13 @@ public class BuyfullSDK {
         msg.sendToTarget();
     }
 
+    private double toDB(double amp){
+        if (amp <= 0 || Double.isNaN(amp) || Double.isInfinite(amp))
+            return THRESHOLD_DB;
+
+        return Math.log(amp) * (8.6858896380650365530225783783322);
+    }
+
     /**
      *  检测18k-20k录音分贝数。
      * @param pcmData       纯PCM数据，无WAV文件头
@@ -275,7 +282,7 @@ public class BuyfullSDK {
         if (pcmData == null){
             throw (new Exception("invalid pcmData or outBin:"));
         }
-        int stepCount = 1024;
+        int stepCount = 2048;
         int stepSize = channels * (bits / 8);
         int startIndex = 0;
         if (!(sampleRate == 44100 || sampleRate == 48000)){
@@ -315,11 +322,11 @@ public class BuyfullSDK {
             return THRESHOLD_DB;
 
         window_hanning(re, stepCount);
-        fft(re,im,10,0);
-        int s = 418, l = 45;
+        fft(re,im,11,0);
+        int s = 836, l = 90;
         if (sampleRate == 48000){
-            s = 384;
-            l = 42;
+            s = 768;
+            l = 84;
         }
         double db = 0;
         for (int index = 0;index < l;++index){
@@ -328,12 +335,9 @@ public class BuyfullSDK {
             db += Math.sqrt(_re * _re + _im * _im);
         }
         db /= l;
-        db = Math.log(db) * (8.6858896380650365530225783783322);
+        db = toDB(db);
 
-        if (Double.isInfinite(db) || Double.isNaN(db))
-            return THRESHOLD_DB;
         return (float)db;
-
     }
 
     /**
@@ -506,7 +510,7 @@ public class BuyfullSDK {
                 params.put("customdata",customData);
             }
             String json = params.toString();
-            String cmd = "soundtag-decode/decodev6/Android/BIN/" + toURLEncoded(json);
+            String cmd = "soundtag-decode/decodev7/Android/BIN/" + toURLEncoded(json);
             URL url = new URL("https://api.euphonyqr.com/api/decode2?cmd=" + cmd);
             connection = (HttpURLConnection) url.openConnection();
             connection.setRequestMethod("POST");
@@ -554,6 +558,8 @@ public class BuyfullSDK {
     private class DecodeResult{
         public int channel;
         public float power;
+        public float distance;
+        public float range;
     }
     private Comparator<DecodeResult> _decodeComparator = new Comparator<DecodeResult>() {
         @Override
@@ -602,9 +608,20 @@ public class BuyfullSDK {
         for (int index = 0;index < old_result.length(); ++index) {
             JSONObject raw_result = old_result.getJSONObject(index);
             decodeResults[index] = new DecodeResult();
-            decodeResults[index].channel = index;
+            if (raw_result.has("channel")){
+                decodeResults[index].channel = raw_result.getInt("channel");
+            }else{
+                decodeResults[index].channel = index;
+                raw_result.put("channel", index);
+            }
+            if (raw_result.has("distance")){
+                decodeResults[index].distance = (float) raw_result.getDouble("distance");
+            }
+            if (raw_result.has("range")){
+                decodeResults[index].range = (float) raw_result.getDouble("range");
+            }
             decodeResults[index].power = (float) raw_result.getDouble("power");
-            raw_result.put("channel", index);
+
             rawResults.put(raw_result);
         }
         Arrays.sort(decodeResults, _decodeComparator);
@@ -631,7 +648,7 @@ public class BuyfullSDK {
         result.put("rawResult", rawResults);
         result.put("sortByPowerResult", sortedResults);
         result.put("result",validResults);
-        result.put("count",allTags.length());
+        result.put("count",validResults.length());
         result.put("allTags",allTags);
         return result.toString();
     }
@@ -699,7 +716,7 @@ public class BuyfullSDK {
     private static final float Pi = 3.14159265358979f;
     private static final int N_WAVE = (64*1024);
     private static final int LOG2_N_WAVE = (6+10);
-    private static final String SDK_VERSION = "1.0.0";
+    private static final String SDK_VERSION = "1.0.1";
 
     private volatile static BuyfullSDK      instance;
     private static float                    fsin[];
@@ -1221,7 +1238,7 @@ public class BuyfullSDK {
         int loudestDBOffset = 0;
         int dBCount = 0;
         int validDBCount = 0;
-        int READ_SIZE = 1024 * RECORD_CHANNEL * (RECORD_BITS / 8);
+        int READ_SIZE = 2048 * RECORD_CHANNEL * (RECORD_BITS / 8);
 
         while ((System.currentTimeMillis() - startTimeStamp) < recordPeriod){
             try{
