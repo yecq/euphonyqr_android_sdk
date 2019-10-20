@@ -420,6 +420,9 @@ public class BuyfullSDK {
         _binBuffer.put((byte) 1);
         _binBuffer.putShort((short) (resultSize & 0xffff));
         byte[] result = new byte[finalSize];
+        if (DEBUG)
+            Log.d(TAG,"bin size " + finalSize);
+
         System.arraycopy(_binBuffer.array(),0,result,0,finalSize);
         return result;
     }
@@ -584,15 +587,16 @@ public class BuyfullSDK {
             return null;
         }
         JSONObject old_json_result = null;
+        JSONArray old_result = null;
         try{
             old_json_result = (JSONObject) new JSONTokener(rawJSON).nextValue();
+            old_result = old_json_result.getJSONArray("result");
         }catch (Exception e){
             Log.d(TAG,"server return invalid result:" + rawJSON);
             e.printStackTrace();
             return null;
         }
 
-        JSONArray old_result = old_json_result.getJSONArray("result");
         String requestID = old_json_result.getString("reqid");
         if (old_result == null || requestID == null || requestID.isEmpty()){
             return null;
@@ -978,7 +982,7 @@ public class BuyfullSDK {
     private static final int RECORD_BITS = 16;
 
     private int _recordTestIndex = 0;
-    private int _preferSampleRate = 44100;
+    private int _preferSampleRate = 48000;
     private int _lastPCMSize = 0;
     private String _lastRecordSource = "";
     private int _lastRecordPeriod = 0;
