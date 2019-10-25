@@ -253,7 +253,7 @@ public class BuyfullSDK {
     }
 
     /**
-     *  录音并且返回纯pcm数据，默认录音参数为44100,16bit,单声道，时长1.2秒。
+     *  录音并且返回纯pcm数据，默认录音参数为48000,16bit,单声道，时长1.1秒。
      * @param callback
      */
     public void record(IRecordCallback callback){
@@ -272,7 +272,7 @@ public class BuyfullSDK {
     /**
      *  检测18k-20k录音分贝数。
      * @param pcmData       纯PCM数据，无WAV文件头
-     * @param sampleRate    44100或48000
+     * @param sampleRate    48000
      * @param channels      1 (单声道)或 2 (双声道交织)
      * @param bits          16 (Short)或 32 (Float)
      * @param isLastFrame   采样PCM头部还是尾部
@@ -343,7 +343,7 @@ public class BuyfullSDK {
     /**
      * 将纯pcm采样处理，提取18k-20k音频，返回的BIN用于detect，参数指定源pcm数据格式, 录音时长一定要大于1.2秒,超出会截取最后1.2秒
      * @param pcmData       纯PCM数据，无WAV文件头
-     * @param sampleRate    44100或48000
+     * @param sampleRate    48000
      * @param channels      1 (单声道)或 2 (双声道交织)
      * @param bits          16 (Short)或 32 (Float)
      * @return 压缩后的bin文件
@@ -656,7 +656,11 @@ public class BuyfullSDK {
         result.put("allTags",allTags);
         return result.toString();
     }
-
+    /*
+     * 上传原始录音文件，帮助动听人员诊断
+     * @param requestID       服务器返回的requestID
+     * @return              处理后的JSON，可能为空
+     */
     public void debugUpload(String requestID) {
         if (requestID == null || requestID.isEmpty()) {
             return;
