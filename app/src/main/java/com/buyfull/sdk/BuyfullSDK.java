@@ -1415,9 +1415,9 @@ public class BuyfullSDK {
             if (temp < min)
                 min = temp;
         }
-        float range = (max - min);
-        float average = (max + min) / 2;
-        float factor = range / 256;
+        float average = 0;
+        float longer = Math.abs(max)>Math.abs(min)?Math.abs(max):Math.abs(min);
+        float factor = longer / 127;
 
         try {
             output.putFloat(average * 2);
@@ -1428,8 +1428,8 @@ public class BuyfullSDK {
                 int result = (int) (temp / factor);
                 if (result > 127)
                     result = 127;
-                else if (result < -128)
-                    result = -128;
+                else if (result < -127)
+                    result = -127;
                 output.put((byte)(result));
             }
             return numberOfSamples + 8;
