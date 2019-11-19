@@ -55,7 +55,7 @@ public class MainActivity extends AppCompatActivity {
             public void onClick(View view) {
                 if (lastReqID != null){
                     resultText.setText("RequestID 已经在剪切板中，可以在微信中粘贴给工作人员用做查询");
-                    BuyfullSDK.getInstance().debugUpload(lastReqID);
+//                    BuyfullSDK.getInstance().debugUpload(lastReqID);
                     ClipboardManager mClipboardManager = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
                     ClipData clipData = ClipData.newPlainText("copy from buyfull sdk", lastReqID);
                     mClipboardManager.setPrimaryClip(clipData);
@@ -69,16 +69,14 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        //test destory
-        //BuyfullSDK.destoryInstance();
     }
     //检查权限后初始化
     protected void checkInit(){
         BuyfullSDK sdk = BuyfullSDK.getInstance();
         // appkey和sandbox请向动听员工询问，tokenURL需要自行布署，此处只是DEMO
-        sdk.setSDKInfo(MyApplication.appKey,MyApplication.isSandbox,MyApplication.tokenURL);
-        // userID或phoneNumber可以做为数据分析标识通过动听后台API返回，请任意设置一个
-        sdk.setUserID("13xxxxxxxxx","custom user id");
+//        sdk.setSDKInfo(MyApplication.appKey,MyApplication.isSandbox,MyApplication.tokenURL);
+//        // userID或phoneNumber可以做为数据分析标识通过动听后台API返回，请任意设置一个
+//        sdk.setUserID("13xxxxxxxxx","custom user id");
 
         //检测权限
         PackageManager pkgManager = getPackageManager();
@@ -96,7 +94,7 @@ public class MainActivity extends AppCompatActivity {
 
     private  void doDetect(){
         BuyfullSDK sdk = BuyfullSDK.getInstance();
-        sdk.setUserID("13xxxxxxxxx","custom user id");
+//        sdk.setUserID("13xxxxxxxxx","custom user id");
         if (sdk.isDetecting()){
             resultText.setText("Please retry later");
         }else{
