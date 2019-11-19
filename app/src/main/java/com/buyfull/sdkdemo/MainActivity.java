@@ -112,6 +112,8 @@ public class MainActivity extends AppCompatActivity {
                                 resultText.setText("No detect result, signal dB is:" + dB);
                             }else {
                                 Log.d(TAG,json);
+                                resultText.setText("got result, signal dB is:" + dB);
+                                /*
                                 try {
                                     JSONObject jsonObj = (JSONObject) new JSONTokener(json).nextValue();
                                     lastReqID = jsonObj.getString("reqid");
@@ -127,7 +129,7 @@ public class MainActivity extends AppCompatActivity {
                                     }
                                 } catch (JSONException e) {
                                     e.printStackTrace();
-                                }
+                                }*/
                             }
                         }
                     });

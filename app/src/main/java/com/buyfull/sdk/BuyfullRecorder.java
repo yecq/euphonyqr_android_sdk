@@ -293,6 +293,7 @@ public class BuyfullRecorder {
                             if (instance != null) {
                                 instance._doTestRecord(msg.arg1,msg.arg2,(IRecordCallback)msg.obj);
                             }
+                            break;
                         default:
                             Looper.myLooper().quit();
                     }
