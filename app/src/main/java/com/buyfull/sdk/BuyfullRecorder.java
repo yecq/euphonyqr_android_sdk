@@ -1,9 +1,7 @@
 package com.buyfull.sdk;
 
-import android.Manifest;
 import android.annotation.SuppressLint;
 import android.media.AudioFormat;
-import android.media.AudioManager;
 import android.media.AudioRecord;
 import android.media.MediaRecorder;
 import android.os.Build;
@@ -32,10 +30,13 @@ public class BuyfullRecorder {
     public static final int NO_RECORD_PERMISSION = 5;//没有录音权限
     public static final int SIGNAL_DB_TOO_LOW = 6;//录音分贝数太低 <-125，不上传服务器检测
 
-    public static final float      LIMIT_DB = -125f; //分贝阈值，低于此值不上传判断
+    public static final float   DEFAULT_LIMIT_DB = -125f; //分贝阈值，低于此值不上传判断
+    public static final long    DEFAULT_RECORD_TIMEOUT = 6000; //默认录音超时
+    public static final long    DEFAULT_VALID_TIME_PERIOD = 1000; //默认上次录音的有效时间
+    public static final int     DEFAULT_RECORD_SAMPLE_RATE = 48000;
 
     public class RecordException extends Exception{
-        public int code;
+        public int code;//见上面定义
         public RecordException(int _code, Exception error) {
             super(error);
             code = _code;
@@ -45,19 +46,44 @@ public class BuyfullRecorder {
             code = _code;
         }
     }
-    private static final String     TAG = "BUYFULL_RECORDER";
-    private static final boolean    DEBUG = true;
 
     public interface IRecordCallback {
         /**
          * 录音结束后回调
          * @param dB        此次录音的分贝数
-         * @param pcm       纯PCM数据
+         * @param bin       压缩后BIN数据
          * @param error     如果有错误则不为空
          */
-        void onRecord(final float dB, final byte[] pcm, final RecordException error);
+        void onRecord(final float dB, final byte[] bin, final RecordException error);
     }
 
+    private class RecordContext{
+        public IRecordCallback      callback;
+        public long                 timeStamp;
+        public float                limitDB = DEFAULT_LIMIT_DB;
+        public long                 timeOut = DEFAULT_RECORD_TIMEOUT;
+        public long                 validTimePeriod = DEFAULT_VALID_TIME_PERIOD;
+        public boolean              stopAfterReturn = false;//是否在录音返回后自动停止录音
+
+        public RecordContext(JSONObject options, IRecordCallback cb){
+            callback = cb;
+            timeStamp = System.currentTimeMillis();
+            try {
+                //允许的option的值
+                if (options != null){
+                    limitDB = (float) options.optDouble("limitdB", DEFAULT_LIMIT_DB);
+                    timeOut = options.optLong("timeout", DEFAULT_RECORD_TIMEOUT);
+                    stopAfterReturn = options.optBoolean("stopAfterReturn", false);
+                    validTimePeriod = options.optLong("validTimePeriod", DEFAULT_VALID_TIME_PERIOD);
+                }
+            }catch (Exception e){
+                e.printStackTrace();
+            }
+        }
+    }
+    /**
+     * 单例
+     */
     public synchronized static BuyfullRecorder getInstance(){
         if (instance == null){
             instance = new BuyfullRecorder();
@@ -66,33 +92,157 @@ public class BuyfullRecorder {
         return instance;
     }
     /**
-     * 当前是否正在录音检测，不能重复调用detect
+     * 当前是否正在录音检测
      * @return
      */
     public synchronized boolean isRecording(){
-        return _isRecording;
+        return _hasTestFinished() && _recorder != null && _recorder.getRecordingState() == RECORDSTATE_RECORDING;
     }
     /**
-     *  录音并且返回纯pcm数据，默认录音参数为48000,16bit,单声道，时长1.1秒。
+     *  录音并且返回压缩BIN数据，默认录音参数为48000,16bit,单声道，时长1.1秒。
      * @param options
      * @param callback
      */
     public void record(JSONObject options, IRecordCallback callback){
         if (callback == null)   return;
-        if (isRecording()){
-            callback.onRecord(LIMIT_DB,null,new RecordException(DUPLICATE_RECORD, "please retry record later"));
-            return;
-        }
-        Message msg = _notifyThread.mHandler.obtainMessage(START_RECORD, -1, -1,callback);
+        RecordContext cxt = new RecordContext(options, callback);
+        Message msg = _notifyThread.mHandler.obtainMessage(START_RECORD, -1, -1,cxt);
         msg.sendToTarget();
     }
 
     public void stop(){
-        _isRecording = false;
+        Message msg = _notifyThread.mHandler.obtainMessage(STOP_RECORD);
+        msg.sendToTarget();
     }
 
 
     ////////////////////////////////////////////////////////////////////////
+    private static final String     TAG = "BUYFULL_RECORDER";
+    private static final boolean    DEBUG = true;
+
+    private static final float Pi = 3.14159265358979f;
+    private static final int N_WAVE = (64*1024);
+    private static final int LOG2_N_WAVE = (6+10);
+    private static final String SDK_VERSION = "1.0.1";
+
+    private volatile static BuyfullRecorder instance;
+    private static float                    fsin[];
+    private float[]                         real;
+    private float[]                         imag;
+    private LooperThread                    _notifyThread;
+    private byte[]                          _recordBuffer;
+    private byte[]                          _tempRecordBuffer;
+    private ByteBuffer                      _binBuffer;
+    private AudioRecord                     _recorder;
+    private long                            _lastBufferTimeStamp;
+
+    private static final int START_RECORD = 1;
+    private static final int STOP_RECORD = 2;
+    private static final int START_TEST_RECORD = 3;
+    private static final int FETCH_BUFFER = 4;
+
+    private static class LooperThread extends Thread implements AudioRecord.OnRecordPositionUpdateListener{
+        public Handler mHandler;
+        public volatile boolean threadStarted;
+        public volatile boolean threadEnded;
+        public LooperThread(String threadName)
+        {
+            super(threadName);
+        }
+
+        @SuppressLint("HandlerLeak")
+        public void run(){
+            Looper.prepare();
+            mHandler = new Handler(){
+                public void handleMessage(Message msg) {
+                    switch (msg.what){
+                        case START_RECORD:
+
+                            if (instance != null){
+                                if (!instance._hasTestFinished()){
+                                    instance._doTestRecord(msg.arg1,msg.arg2,(RecordContext) msg.obj);
+                                }else{
+                                    instance._doRecord(msg.arg1,msg.arg2,(RecordContext)msg.obj);
+                                }
+                            }
+                            break;
+
+                        case STOP_RECORD:
+                            if (instance != null)
+                                instance._doStop();
+                            break;
+
+                        case START_TEST_RECORD:
+                            if (instance != null) {
+                                instance._doTestRecord(msg.arg1,msg.arg2,(RecordContext)msg.obj);
+                            }
+                            break;
+
+                        case FETCH_BUFFER:
+                            if (instance != null) {
+                                instance._fetchBuffer((RecordContext)msg.obj);
+                            }
+                            break;
+                        default:
+                            Looper.myLooper().quit();
+                    }
+                }
+            };
+            threadStarted = true;
+            Looper.loop();
+            threadEnded = false;
+        }
+
+        @Override
+        public void onMarkerReached(AudioRecord audioRecord) {
+
+        }
+
+        @Override
+        public void onPeriodicNotification(AudioRecord audioRecord) {
+            if (instance != null) {
+                instance._updateBuffer(audioRecord);
+            }
+        }
+    }
+
+    private BuyfullRecorder(){
+        _tempRecordBuffer = new byte[RECORD_FETCH_FRAMES * 2 * RECORD_BITS / 8];
+        _recordBuffer = new byte[230 * 1024];
+        _binBuffer = ByteBuffer.allocate(8 * 1024).order(ByteOrder.LITTLE_ENDIAN);
+    }
+
+    private void init(){
+        Log.v(TAG,"Buyfull recorder version:" + SDK_VERSION);
+        fsin = new float[N_WAVE];
+        real = new float[N_WAVE];
+        imag = new float[N_WAVE];
+
+        _initRecordConfig();
+        _notifyThread = new LooperThread("BuyfullRecorder");
+        _notifyThread.start();
+        while (!_notifyThread.threadStarted)
+        {
+            try{
+                Thread.sleep(100);
+            }
+            catch (Exception e)
+            {
+
+            }
+        }
+
+        for (int i=0; i<N_WAVE; i++){
+            fsin[i] = (float)Math.sin(2*Pi/N_WAVE*i);
+        }
+
+    }
+
+    private static final float THRESHOLD_DB = -150;
+    private static final int THRESHOLD_DELAY = 1000;
+    private static final int RECORD_FETCH_FRAMES = 4096;
+    private static final int TEST_FETCH_FRAMES = 2048;
+
     private double toDB(double amp){
         if (amp <= 0 || Double.isNaN(amp) || Double.isInfinite(amp))
             return THRESHOLD_DB;
@@ -104,10 +254,10 @@ public class BuyfullRecorder {
         if (pcmData == null){
             throw (new Exception("invalid pcmData or outBin:"));
         }
-        int stepCount = 2048;
+        int stepCount = TEST_FETCH_FRAMES;
         int stepSize = channels * (bits / 8);
         int startIndex = 0;
-        if (!(sampleRate == 44100 || sampleRate == 48000)){
+        if (!(sampleRate == DEFAULT_RECORD_SAMPLE_RATE)){
             throw (new Exception("invalid sample rate:" + sampleRate));
         }else if (channels < 1 || channels > 2){
             throw (new Exception("invalid channel count:" + channels));
@@ -146,7 +296,7 @@ public class BuyfullRecorder {
         window_hanning(re, stepCount);
         fft(re,im,11,0);
         int s = 836, l = 90;
-        if (sampleRate == 48000){
+        if (sampleRate == DEFAULT_RECORD_SAMPLE_RATE){
             s = 768;
             l = 84;
         }
@@ -175,7 +325,7 @@ public class BuyfullRecorder {
             throw (new Exception("pcmData is too big"));
         }
         int startIndex = 0;
-        if (!(sampleRate == 44100 || sampleRate == 48000)){
+        if (!(sampleRate == DEFAULT_RECORD_SAMPLE_RATE)){
             throw (new Exception("invalid sample rate:" + sampleRate));
         }else if (channels < 1 || channels > 2){
             throw (new Exception("invalid channel count:" + channels));
@@ -206,7 +356,7 @@ public class BuyfullRecorder {
         fft(re,im,LOG2_N_WAVE,0);
 
         int s = 26112;
-        if (sampleRate == 48000){
+        if (sampleRate == DEFAULT_RECORD_SAMPLE_RATE){
             s = 24064;
         }
 
@@ -240,102 +390,6 @@ public class BuyfullRecorder {
         System.arraycopy(_binBuffer.array(),0,result,0,finalSize);
         return result;
     }
-    private static final float Pi = 3.14159265358979f;
-    private static final int N_WAVE = (64*1024);
-    private static final int LOG2_N_WAVE = (6+10);
-    private static final String SDK_VERSION = "1.0.1";
-
-    private volatile static BuyfullRecorder      instance;
-    private static float                    fsin[];
-    private float[]                         real;
-    private float[]                         imag;
-    private LooperThread                    _notifyThread;
-    private volatile boolean                _threadStarted;
-    private byte[]                          _recordBuffer;
-    private ByteBuffer                      _binBuffer;
-    private volatile boolean _isRecording;
-
-
-    private static final int START_RECORD = 1;
-    private static final int STOP_RECORD = 2;
-    private static final int START_TEST_RECORD = 3;
-
-    private static class LooperThread extends Thread {
-        public Handler mHandler;
-        public LooperThread(String threadName)
-        {
-            super(threadName);
-        }
-
-        @SuppressLint("HandlerLeak")
-        public void run(){
-            Looper.prepare();
-            mHandler = new Handler(){
-                public void handleMessage(Message msg) {
-                    switch (msg.what){
-                        case START_RECORD:
-
-                            if (instance != null){
-                                if (!instance._hasTestFinished()){
-                                    instance._doTestRecord(msg.arg1,msg.arg2,(IRecordCallback)msg.obj);
-                                }else{
-                                    instance._doRecord(msg.arg1,msg.arg2,(IRecordCallback)msg.obj);
-                                }
-                            }
-                            break;
-
-                        case STOP_RECORD:
-                            if (instance != null)
-                                instance._doStop();
-                            break;
-
-                        case START_TEST_RECORD:
-                            if (instance != null) {
-                                instance._doTestRecord(msg.arg1,msg.arg2,(IRecordCallback)msg.obj);
-                            }
-                            break;
-                        default:
-                            Looper.myLooper().quit();
-                    }
-                }
-            };
-            instance._threadStarted = true;
-            Looper.loop();
-            instance._threadStarted = false;
-        }
-    }
-
-    private BuyfullRecorder(){
-        _recordBuffer = new byte[200 * 1024];
-        _binBuffer = ByteBuffer.allocate(8 * 1024).order(ByteOrder.LITTLE_ENDIAN);
-    }
-
-    private void init(){
-        fsin = new float[N_WAVE];
-        real = new float[N_WAVE];
-        imag = new float[N_WAVE];
-
-        for (int i=0; i<N_WAVE; i++){
-            fsin[i] = (float)Math.sin(2*Pi/N_WAVE*i);
-        }
-
-        _initRecordConfig();
-        _notifyThread = new LooperThread("BuyfullRecorder");
-        _notifyThread.start();
-        while (!_threadStarted)
-        {
-            try{
-                Thread.sleep(100);
-            }
-            catch (Exception e)
-            {
-
-            }
-        }
-    }
-
-    private static final float THRESHOLD_DB = -150;
-    private static final int THRESHOLD_DELAY = 1000;
 
     private class RecordConfig{
         public int index;
@@ -383,10 +437,12 @@ public class BuyfullRecorder {
     private static final int RECORD_BITS = 16;
 
     private int _recordTestIndex = 0;
-    private int _preferSampleRate = 48000;
+    private int _preferSampleRate = DEFAULT_RECORD_SAMPLE_RATE;
     private int _lastPCMSize = 0;
     private String _lastRecordSource = "";
     private int _lastRecordPeriod = 0;
+    private int _lastRecordExpectSize = 0;
+    private long _lastRecordStartTime = -1;
 
     private void _initRecordConfig(){
         if (_recordConfigComparator != null)
@@ -438,40 +494,25 @@ public class BuyfullRecorder {
         };
     }
 
-    private void _record(int source, int duration, IRecordCallback callback){
-        if (callback == null)   return;
+    private void _record(int source, int duration, RecordContext cxt){
         if (_hasTestFinished()){
-            Message msg = _notifyThread.mHandler.obtainMessage(START_RECORD, source, duration,callback);
+            Message msg = _notifyThread.mHandler.obtainMessage(START_RECORD, source, duration,cxt);
             msg.sendToTarget();
         }else{
-            Message msg = _notifyThread.mHandler.obtainMessage(START_TEST_RECORD, source, duration,callback);
+            Message msg = _notifyThread.mHandler.obtainMessage(START_TEST_RECORD, source, duration,cxt);
             msg.sendToTarget();
         }
     }
 
-    private void _safeCallBack(IRecordCallback callback, float dB, byte[] pcm, int errCode, String exception, boolean finish){
-        try{
-            if (finish){
-                _isRecording = false;
-            }
-            if (pcm != null){
-                callback.onRecord(dB,pcm,null);
-            }else{
-                callback.onRecord(dB,pcm,new RecordException(errCode, exception));
-            }
-        }catch (Exception e){
-            e.printStackTrace();
-        }
-    }
-    private void _safeRecordCallBack(IRecordCallback callback, float dB, byte[] pcm, int errorCode, Exception error, boolean finish){
+    private void _safeRecordCallBack(RecordContext cxt, float dB, byte[] pcm, int errorCode, Exception error, boolean finish){
         try{
             if (finish){
                 _doStop();
             }
             if (error != null){
-                callback.onRecord(dB,null,new RecordException(errorCode, error));
+                cxt.callback.onRecord(dB,null,new RecordException(errorCode, error));
             }else{
-                callback.onRecord(dB,pcm,null);
+                cxt.callback.onRecord(dB,pcm,null);
             }
 
         }catch (Exception e){
@@ -480,17 +521,40 @@ public class BuyfullRecorder {
     }
 
     private void _doStop(){
-        //TODO::
-        try{
+        if (_recorder == null)
+            return;
 
+        try {
+            _recorder.stop();
         }catch (Exception e){
 
         }
+        try {
+            _recorder.release();
+        }catch (Exception e){
+
+        }
+        _recorder = null;
     }
 
-    private void _doRecord(int source, int duration, IRecordCallback callback){
+    private boolean _hasExpired(RecordContext cxt){
+        if (_lastBufferTimeStamp < 0){
+            return true;
+        }
+        if ((System.currentTimeMillis() - _lastBufferTimeStamp) > cxt.validTimePeriod){
+            return true;
+        }
+        return false;
+    }
+
+    private void _doRecord(int source, int duration, RecordContext cxt){
         if (!_hasTestFinished()){
-            _doTestRecord(source, duration, callback);
+            _doTestRecord(source, duration, cxt);
+            return;
+        }
+        if (!_hasExpired(cxt)){
+            Message msg = _notifyThread.mHandler.obtainMessage(FETCH_BUFFER, cxt);
+            msg.sendToTarget();
             return;
         }
         int audioSource = source;
@@ -510,110 +574,196 @@ public class BuyfullRecorder {
         }
 
         if (config.delayTime >= THRESHOLD_DELAY){
-            _safeRecordCallBack(callback,LIMIT_DB,null,RECORD_FAIL  , new Exception("record use:"+ config.tag + " is not available"), true);
+            _safeRecordCallBack(cxt, DEFAULT_LIMIT_DB,null,RECORD_FAIL  , new Exception("record use:"+ config.tag + " is not available"), true);
             return;
         }
 
-        AudioRecord record = null;
-        try{
-            record = new AudioRecord(audioSource, _preferSampleRate,AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT,16 * 1024);
-            if (record.getState() != AudioRecord.STATE_INITIALIZED){
-                _safeRecordCallBack(callback,LIMIT_DB,null,RECORD_FAIL  ,new Exception("record use:"+ config.tag + " init failed1"), true);
+        if (_recorder == null){
+            _lastBufferTimeStamp = -1;
+            try{
+                _recorder = new AudioRecord(audioSource, _preferSampleRate,AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT,16 * 1024);
+                if (_recorder.getState() != AudioRecord.STATE_INITIALIZED){
+                    _safeRecordCallBack(cxt, DEFAULT_LIMIT_DB,null,RECORD_FAIL  ,new Exception("record use:"+ config.tag + " init failed1"), true);
+                    return;
+                }
+            }catch (Exception e){
+                _safeRecordCallBack(cxt, DEFAULT_LIMIT_DB,null,RECORD_FAIL  ,  new Exception("record use:"+ config.tag + " init failed1"), true);
                 return;
             }
-        }catch (Exception e){
-            _safeRecordCallBack(callback,LIMIT_DB,null,RECORD_FAIL  ,  new Exception("record use:"+ config.tag + " init failed1"), true);
-            return;
-        }
 
+            _recorder.setPositionNotificationPeriod(RECORD_FETCH_FRAMES);
+            _recorder.setRecordPositionUpdateListener(_notifyThread,_notifyThread.mHandler);
+        }
+        AudioRecord record = _recorder;
 
         int realSampleRate = record.getSampleRate();
         if (realSampleRate != _preferSampleRate){
-            _safeRecordCallBack(callback,LIMIT_DB,null,RECORD_FAIL  ,  new Exception("record use:"+ config.tag + " init failed2"), true);
+            _safeRecordCallBack(cxt, DEFAULT_LIMIT_DB,null,RECORD_FAIL  ,  new Exception("record use:"+ config.tag + " init failed2"), true);
             return;
         }
-        try{
-            record.startRecording();
-        }catch (Exception e){
-            try {
-                record.stop();
-            }catch (Exception e1){
-
-            }
-            try {
-                record.release();
-            }catch (Exception e2){
-
-            }
-            _safeRecordCallBack(callback,LIMIT_DB,null,RECORD_FAIL,e, true);
-            return;
-        }
-
         if (record.getRecordingState() != RECORDSTATE_RECORDING){
-            _safeRecordCallBack(callback,LIMIT_DB,null,RECORD_FAIL  ,  new Exception("record use:"+ config.tag + " start record fail"), true);
-            return;
-        }
-
-        long startTimeStamp = System.currentTimeMillis();
-        int expectReadSize = (realSampleRate * recordPeriod * (RECORD_BITS / 8) )/ 1000;
-        if ((expectReadSize % 2) == 1)
-            --expectReadSize;
-
-        _lastPCMSize = expectReadSize;
-        _lastRecordSource = config.tag;
-        _lastRecordPeriod = recordPeriod;
-
-        int readsize = 0;
-        int offset = 0;
-        do{
+            _lastBufferTimeStamp = -1;
             try{
-                readsize = record.read(_recordBuffer, offset,expectReadSize - offset);
-                if (readsize <= 0){
-                    break;
-                }
-                offset += readsize;
+                record.startRecording();
             }catch (Exception e){
-                e.printStackTrace();
-                readsize = -1;
-            }
-        }while (offset < expectReadSize);
+                try {
+                    record.stop();
+                }catch (Exception e1){
 
-        try {
-            record.stop();
-        }catch (Exception e){
+                }
+                try {
+                    record.release();
+                }catch (Exception e2){
 
-        }
-        try {
-            record.release();
-        }catch (Exception e){
-
-        }
-        long passedTime = System.currentTimeMillis() - startTimeStamp;
-        if (offset < expectReadSize || (passedTime < recordPeriod) || (passedTime > (recordPeriod + 500))){
-            _safeRecordCallBack(callback,LIMIT_DB,null,RECORD_TIMEOUT  ,  new Exception("record use:"+ config.tag + " record fail"), false);
-        }else{
-            byte[] result = new byte[expectReadSize];
-            System.arraycopy(_recordBuffer,0,result,0,expectReadSize);
-            float dB = LIMIT_DB;
-            try {
-                dB = getDB(result, expectReadSize, realSampleRate, RECORD_CHANNEL, RECORD_BITS, true);
-            } catch (Exception e) {
-                e.printStackTrace();
-                _safeRecordCallBack(callback,dB,null,SIGNAL_DB_TOO_LOW  ,  new Exception("record use:"+ config.tag + " get dB fail"), false);
+                }
+                _safeRecordCallBack(cxt, DEFAULT_LIMIT_DB,null,RECORD_FAIL,e, true);
                 return;
             }
-            if (dB == THRESHOLD_DB){
-                _safeRecordCallBack(callback,dB,null,NO_RECORD_PERMISSION  ,  new Exception("record use:"+ config.tag + " get dB fail"), true);
-                return;
-            }else if (dB < LIMIT_DB){
-                _safeRecordCallBack(callback,dB,null,SIGNAL_DB_TOO_LOW  ,  new Exception("record use:"+ config.tag + " get dB fail"), false);
+            if (record.getRecordingState() != RECORDSTATE_RECORDING){
+                _safeRecordCallBack(cxt, DEFAULT_LIMIT_DB,null,RECORD_FAIL,new Exception("record use:"+ config.tag + " init failed3"), true);
                 return;
             }
-            _safeRecordCallBack(callback,dB,result,NO_ERROR, null, false);
+            _lastRecordStartTime = System.currentTimeMillis();
+            _lastRecordSource = config.tag;
+            _lastRecordPeriod = recordPeriod;
+            _lastPCMSize = 0;
+            int expectReadSize = (realSampleRate * recordPeriod * (RECORD_BITS / 8) )/ 1000;
+            if ((expectReadSize % 2) == 1)
+                --expectReadSize;
+            _lastRecordExpectSize = expectReadSize;
         }
+        Message msg = _notifyThread.mHandler.obtainMessage(FETCH_BUFFER, cxt);
+        _notifyThread.mHandler.sendMessageDelayed(msg,DEFAULT_VALID_TIME_PERIOD);
     }
 
-    private void _doTestRecord(int source, int duration, IRecordCallback callback){
+    private void _updateBuffer(AudioRecord record){
+        final int expect_size = RECORD_FETCH_FRAMES * RECORD_BITS / 8;
+        int readSize = 0;
+        int offset = 0;
+        try {
+            if (Build.VERSION.SDK_INT >= 23) {
+                do{
+                    readSize = record.read(_tempRecordBuffer, offset, expect_size, AudioRecord.READ_NON_BLOCKING);
+                    if (readSize < 0){
+                        //error
+                        _doStop();
+                        return;
+                    }
+                    offset += readSize;
+                    if ((readSize < expect_size) || ((offset + expect_size) > _tempRecordBuffer.length)){
+                        break;
+                    }
+                }while (true);
+            }else{
+                readSize = record.read(_tempRecordBuffer, 0, expect_size);
+                if (readSize < 0){
+                    //error
+                    _doStop();
+                    return;
+                }
+                offset = readSize;
+            }
+
+            readSize = offset;
+            if (DEBUG){
+                Log.d(TAG,"update frames: " + readSize);
+            }
+        }catch (Exception e){
+            e.printStackTrace();
+            _doStop();
+            return;
+        }
+
+        if ((_lastPCMSize + readSize) >= _recordBuffer.length){
+            //trim last half pcm data
+            int leftSize = _recordBuffer.length / 2 - readSize;
+            if (DEBUG){
+                Log.d(TAG,"update frames overflow, trim to left size: " + leftSize);
+            }
+            System.arraycopy(_recordBuffer,_lastPCMSize - leftSize,_recordBuffer,0,leftSize);
+            _lastPCMSize = leftSize;
+        }
+        //copy temp buffer to record buffer
+        System.arraycopy(_tempRecordBuffer,0,_recordBuffer,_lastPCMSize,readSize);
+        _lastPCMSize += readSize;
+        _lastBufferTimeStamp = System.currentTimeMillis();
+    }
+
+    private void _fetchBuffer(RecordContext cxt){
+        int expectReadSize = _lastRecordExpectSize;
+        if ((_hasExpired(cxt) && isRecording())|| (_lastPCMSize < expectReadSize)){
+            //if record buffer is out dated or not enough, we should wait or timeout
+            if ((System.currentTimeMillis() - cxt.timeStamp) > cxt.timeOut){
+                _safeRecordCallBack(cxt,DEFAULT_LIMIT_DB,null,RECORD_TIMEOUT,new Exception("record use:"+ _lastRecordSource + " record time out"), true);
+                return;
+            }else{
+                Message msg = _notifyThread.mHandler.obtainMessage(FETCH_BUFFER, cxt);
+                _notifyThread.mHandler.sendMessageDelayed(msg,DEFAULT_VALID_TIME_PERIOD / 5);
+                return;
+            }
+        }
+
+        if (!isRecording()){
+            _doRecord(-1,-1,cxt);
+            return;
+        }
+
+        byte[] result = new byte[expectReadSize];
+        System.arraycopy(_recordBuffer,_lastPCMSize - expectReadSize,result,0,expectReadSize);
+        float dB = DEFAULT_LIMIT_DB;
+        try {
+            dB = getDB(result, expectReadSize, DEFAULT_RECORD_SAMPLE_RATE, RECORD_CHANNEL, RECORD_BITS, true);
+        } catch (Exception e) {
+            e.printStackTrace();
+            _safeRecordCallBack(callback,dB,null,SIGNAL_DB_TOO_LOW  ,  new Exception("record use:"+ config.tag + " get dB fail"), false);
+            return;
+        }
+        if (dB == THRESHOLD_DB){
+            _safeRecordCallBack(callback,dB,null,NO_RECORD_PERMISSION  ,  new Exception("record use:"+ config.tag + " get dB fail"), true);
+            return;
+        }else if (dB < DEFAULT_LIMIT_DB){
+            _safeRecordCallBack(callback,dB,null,SIGNAL_DB_TOO_LOW  ,  new Exception("record use:"+ config.tag + " get dB fail"), false);
+            return;
+        }
+        _safeRecordCallBack(callback,dB,result,NO_ERROR, null, false);
+
+        //检测分贝数，太低了说明很可能是没信号，后续不检测
+        if (dB <= LIMIT_DB){
+            if (DEBUG){
+                Log.d(TAG, "pcm db is " + dB);
+                Log.d(TAG,"Almost no signal, return");
+            }
+
+            _safeCallBack(callback,dB,null, null,true);
+            return;
+        }
+        float pcmDB_start = 0;
+        try {
+            pcmDB_start = getDB(pcm, pcm.length, sampleRate, RECORD_CHANNEL,RECORD_BITS,false);
+        } catch (Exception e) {
+            _safeCallBack(callback,pcmDB_start,null, e,true);
+        }
+        //检测分贝数，太低了说明很可能是没信号，后续不检测
+        if (pcmDB_start <= LIMIT_DB){
+            if (DEBUG){
+                Log.d(TAG, "pcm db is " + pcmDB_start);
+                Log.d(TAG,"Almost no signal, return");
+            }
+
+            _safeCallBack(callback,pcmDB_start,null, null,true);
+            return;
+        }
+
+        byte[] binData = null;
+        try {
+            binData = buildBin(pcm, sampleRate, recordPeriodInMS,RECORD_CHANNEL,RECORD_BITS);
+        } catch (Exception e) {
+            _safeCallBack(callback,dB,null, e,true);
+        }
+
+    }
+
+    private void _doTestRecord(int source, int duration, RecordContext cxt){
         int audioSource = source;
         int recordPeriod = duration;
 
@@ -631,12 +781,12 @@ public class BuyfullRecorder {
             record = new AudioRecord(audioSource, _preferSampleRate,AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT, 10 *1024);
             if (record.getState() != AudioRecord.STATE_INITIALIZED){
                 _setTestResult(THRESHOLD_DELAY,THRESHOLD_DB,true);
-                _record(source, duration, callback);
+                _record(source, duration, cxt);
                 return;
             }
         }catch (Exception e){
             _setTestResult(THRESHOLD_DELAY,THRESHOLD_DB,true);
-            _record(source, duration, callback);
+            _record(source, duration, cxt);
             return;
         }
 
@@ -644,20 +794,20 @@ public class BuyfullRecorder {
         int realSampleRate = record.getSampleRate();
         if (realSampleRate != _preferSampleRate){
             _setTestResult(THRESHOLD_DELAY,THRESHOLD_DB,true);
-            _record(source, duration, callback);
+            _record(source, duration, cxt);
             return;
         }
         try{
             record.startRecording();
         }catch (Exception e){
             _setTestResult(THRESHOLD_DELAY,THRESHOLD_DB,true);
-            _record(source, duration, callback);
+            _record(source, duration, cxt);
             return;
         }
 
         if (record.getRecordingState() != RECORDSTATE_RECORDING){
             _setTestResult(THRESHOLD_DELAY,THRESHOLD_DB,true);
-            _record(source, duration, callback);
+            _record(source, duration, cxt);
             return;
         }
 
@@ -671,7 +821,7 @@ public class BuyfullRecorder {
         int loudestDBOffset = 0;
         int dBCount = 0;
         int validDBCount = 0;
-        int READ_SIZE = 2048 * RECORD_CHANNEL * (RECORD_BITS / 8);
+        int READ_SIZE = TEST_FETCH_FRAMES * RECORD_CHANNEL * (RECORD_BITS / 8);
 
         while ((System.currentTimeMillis() - startTimeStamp) < recordPeriod){
             try{
@@ -684,7 +834,7 @@ public class BuyfullRecorder {
                 lastDB = getDB(_recordBuffer, READ_SIZE, realSampleRate,RECORD_CHANNEL,RECORD_BITS,true);
                 totalDB += lastDB;
                 ++dBCount;
-                if (lastDB > LIMIT_DB){
+                if (lastDB > DEFAULT_LIMIT_DB){
                     if (lastDB > loudestDB){
                         loudestDB = lastDB;
                         loudestDBOffset = offset;
@@ -716,7 +866,7 @@ public class BuyfullRecorder {
             lastDB = totalDB / dBCount;
             _setTestResult(loudestDBOffset * 1000 / realSampleRate,lastDB,false);
         }
-        _record(source, duration, callback);
+        _record(source, duration, cxt);
     }
 
     private boolean _hasTestFinished(){

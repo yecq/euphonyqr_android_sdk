@@ -2,7 +2,7 @@ package com.buyfull.sdk;
 
 import android.content.Context;
 
-import static com.buyfull.sdk.BuyfullRecorder.LIMIT_DB;
+import static com.buyfull.sdk.BuyfullRecorder.DEFAULT_LIMIT_DB;
 
 public class BuyfullSDK {
     public interface IDetectCallback {
@@ -40,7 +40,7 @@ public class BuyfullSDK {
     public void detect(String customData, final IDetectCallback callback){
         if (callback == null)   return;
         if (isDetecting()){
-            callback.onDetect(LIMIT_DB,null, new Exception("don't call detect while detecting"));
+            callback.onDetect(DEFAULT_LIMIT_DB,null, new Exception("don't call detect while detecting"));
             return;
         }
         BuyfullRecorder.getInstance().record(null, new BuyfullRecorder.IRecordCallback() {
