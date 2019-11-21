@@ -51,26 +51,54 @@ public class BuyfullSDK {
     }
 
     private class DetectContext{
+        public Handler              callbackHandler;
         public IDetectCallback      callback;
         public String               customData;
         public long                 timeStamp;
         public long                 timeOut = DEFAULT_RECORD_TIMEOUT;
-        public boolean              autoRetry = true;//如果解析失败是否自动重试
+        public boolean              alwaysAutoRetry = false;//如果解析失败是否自动重试
+        public boolean              firstTimeBoost = false;//第一次解析是否自动重试
         public JSONObject           options;
         public DetectContext(JSONObject _options, IDetectCallback cb){
             callback = cb;
             options = _options;
             timeStamp = System.currentTimeMillis();
+            callbackHandler = new Handler();
             try {
                 //允许的option的值
                 if (options != null){
                     customData = options.optString("customData");
                     timeOut = options.optLong("timeout", DEFAULT_RECORD_TIMEOUT);
-                    autoRetry = options.optBoolean("autoRetry", true);
+                    alwaysAutoRetry = options.optBoolean("alwaysAutoRetry", false);
+                    firstTimeBoost = options.optBoolean("firstTimeBoost", false);
                 }
             }catch (Exception e){
                 e.printStackTrace();
             }
+        }
+        public JSONObject getRecorderOptions(){
+            JSONObject recorderResult = new JSONObject();
+            try {
+                if (!options.isNull("limitdB"))
+                    recorderResult.put("limitdB",options.get("limitdB"));
+
+                if (!options.isNull("timeout"))
+                    recorderResult.put("timeout",options.get("timeout"));
+
+                boolean stopAfterReturn = options.optBoolean("stopAfterReturn",false);
+                if (firstTimeBoost && !_hasSuccessGotResult && stopAfterReturn){
+                    recorderResult.put("stopAfterReturn", false);
+                }else if (!options.isNull("stopAfterReturn")){
+                    recorderResult.put("stopAfterReturn",options.get("stopAfterReturn"));
+                }
+
+                if (!options.isNull("validTimePeriod"))
+                    recorderResult.put("validTimePeriod",options.get("validTimePeriod"));
+
+            }catch (Exception e){
+
+            }
+            return recorderResult;
         }
     }
     public synchronized static BuyfullSDK getInstance(){
@@ -170,7 +198,7 @@ public class BuyfullSDK {
 
         if (_token != null && !_token.isEmpty() && _hasMicphonePermission && (!_isDetecting || isRetry)) {
             _isDetecting = true;
-            BuyfullRecorder.getInstance().record(cxt.options,new BuyfullRecorder.IRecordCallback() {
+            BuyfullRecorder.getInstance().record(cxt.getRecorderOptions(),new BuyfullRecorder.IRecordCallback() {
                 @Override
                 public void onRecord(final float dB, final byte[] bin, final BuyfullRecorder.RecordException error) {
                     if (error != null){
@@ -199,7 +227,7 @@ public class BuyfullSDK {
                         _safeCallBack(cxt,dB,null, e,true);
                     }
 
-                    if (cxt.autoRetry && ((System.currentTimeMillis() - cxt.timeStamp) < cxt.timeOut)){
+                    if ((cxt.alwaysAutoRetry || (cxt.firstTimeBoost && !_hasSuccessGotResult) )&& ((System.currentTimeMillis() - cxt.timeStamp) < cxt.timeOut)){
                         //check if alltags is empty, and autoretry if not timeout
                         boolean needRetry = true;
 
@@ -208,6 +236,7 @@ public class BuyfullSDK {
                                 JSONObject jsonObj = (JSONObject) new JSONTokener(jsonResult).nextValue();
                                 int tagCount = jsonObj.getInt("count");
                                 if (tagCount > 0)  {
+                                    _hasSuccessGotResult = true;
                                     needRetry = false;
                                 }
                             } catch (JSONException e) {
@@ -476,6 +505,7 @@ public class BuyfullSDK {
     private String                          _deviceInfo;
     private String                          _userID;
     private String                          _phone;
+    private boolean                         _hasSuccessGotResult;
 
     private static final int INIT_MSG = 1;
     private static final int DESTORY = 2;
@@ -562,7 +592,7 @@ public class BuyfullSDK {
         }
     }
 
-    private void _safeCallBack(DetectContext cxt, float dB, String json, Exception error, boolean finish){
+    private void _safeCallBack(final DetectContext cxt,final float dB,final String json,final Exception error, boolean finish){
         if (DEBUG){
             Log.d(TAG,"Detect use time: " + (System.currentTimeMillis() - cxt.timeStamp));
         }
@@ -570,7 +600,13 @@ public class BuyfullSDK {
             if (finish){
                 _isDetecting = false;
             }
-            cxt.callback.onDetect(dB,json,error);
+            cxt.callbackHandler.post(new Runnable() {
+                @Override
+                public void run() {
+                    cxt.callback.onDetect(dB,json,error);
+                }
+            });
+
         }catch (Exception e){
             e.printStackTrace();
         }

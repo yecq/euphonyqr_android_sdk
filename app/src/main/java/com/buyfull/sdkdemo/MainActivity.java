@@ -100,44 +100,39 @@ public class MainActivity extends AppCompatActivity {
         }else{
             JSONObject options = new JSONObject();
             try{
-                options.put("autoRetry", false);
+                options.put("firstTimeBoost", true);
+//                options.put("stopAfterReturn", true);
             }catch (Exception e){}
 
             BuyfullSDK.getInstance().detect(options, new BuyfullSDK.IDetectCallback() {
                 @Override
                 public void onDetect(final float dB,final String json,final Exception error) {
-                    //回调不在主线程
-                    runOnUiThread(new Runnable() {
-                        @Override
-                        public void run() {
-                            if (error != null){
-                                error.printStackTrace();
-                                resultText.setText(error.getLocalizedMessage());
-                            }else if(json == null){
-                                resultText.setText("No detect result, signal dB is:" + dB);
-                            }else {
-                                Log.d(TAG,json);
-                                resultText.setText("got result, signal dB is:" + dB);
+                    if (error != null){
+                        error.printStackTrace();
+                        resultText.setText(error.getLocalizedMessage());
+                    }else if(json == null){
+                        resultText.setText("No detect result, signal dB is:" + dB);
+                    }else {
+                        Log.d(TAG,json);
+                        resultText.setText("got result, signal dB is:" + dB);
 
-                                try {
-                                    JSONObject jsonObj = (JSONObject) new JSONTokener(json).nextValue();
-                                    lastReqID = jsonObj.getString("reqid");
-                                    int tagCount = jsonObj.getInt("count");
-                                    if (tagCount > 0){
-                                        JSONArray allTags = jsonObj.getJSONArray("allTags");
-                                        resultText.setText("RequestID is:" + lastReqID + "\nTest result is:" + allTags.join(","));
-                                    }else{
-                                        JSONArray sortedResults = jsonObj.getJSONArray("sortByPowerResult");
-                                        JSONObject result1 = sortedResults.getJSONObject(0);
-                                        JSONObject result2 = sortedResults.getJSONObject(1);
-                                        resultText.setText("RequestID is:" + lastReqID + "\nTest result is null, power is (dB):" + result1.getDouble("power") + " | " + result2.getDouble("power"));
-                                    }
-                                } catch (JSONException e) {
-                                    e.printStackTrace();
-                                }
+                        try {
+                            JSONObject jsonObj = (JSONObject) new JSONTokener(json).nextValue();
+                            lastReqID = jsonObj.getString("reqid");
+                            int tagCount = jsonObj.getInt("count");
+                            if (tagCount > 0){
+                                JSONArray allTags = jsonObj.getJSONArray("allTags");
+                                resultText.setText("RequestID is:" + lastReqID + "\nTest result is:" + allTags.join(","));
+                            }else{
+                                JSONArray sortedResults = jsonObj.getJSONArray("sortByPowerResult");
+                                JSONObject result1 = sortedResults.getJSONObject(0);
+                                JSONObject result2 = sortedResults.getJSONObject(1);
+                                resultText.setText("RequestID is:" + lastReqID + "\nTest result is null, power is (dB):" + result1.getDouble("power") + " | " + result2.getDouble("power"));
                             }
+                        } catch (JSONException e) {
+                            e.printStackTrace();
                         }
-                    });
+                    }
                 }
             });
         }

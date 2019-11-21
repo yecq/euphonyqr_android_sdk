@@ -61,6 +61,7 @@ public class BuyfullRecorder {
     }
 
     private class RecordContext{
+        public Handler              callbackHandler;
         public IRecordCallback      callback;
         public long                 timeStamp;
         public float                limitDB = DEFAULT_LIMIT_DB;
@@ -71,6 +72,7 @@ public class BuyfullRecorder {
         public RecordContext(JSONObject options, IRecordCallback cb){
             callback = cb;
             timeStamp = System.currentTimeMillis();
+            callbackHandler = new Handler();
             try {
                 //允许的option的值
                 if (options != null){
@@ -509,17 +511,16 @@ public class BuyfullRecorder {
         }
     }
 
-    private void _safeRecordCallBack(final RecordContext cxt, float dB, byte[] pcm, int errorCode, Exception error, boolean finish){
+    private void _safeRecordCallBack(final RecordContext cxt,final float dB,final byte[] pcm, final int errorCode, final Exception error, boolean finish){
         try{
             if (finish){
-                _doStop();
+                stop();
             }
             if (error != null){
                 cxt.callback.onRecord(dB,null,new RecordException(errorCode, error));
             }else{
                 cxt.callback.onRecord(dB,pcm,null);
             }
-
         }catch (Exception e){
             e.printStackTrace();
         }
@@ -586,7 +587,7 @@ public class BuyfullRecorder {
         if (_recorder == null){
             _lastBufferTimeStamp = -1;
             try{
-                _recorder = new AudioRecord(audioSource, _preferSampleRate,AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT,16 * 1024);
+                _recorder = new AudioRecord(audioSource, _preferSampleRate,AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT,256 * 1024);
                 if (_recorder.getState() != AudioRecord.STATE_INITIALIZED){
                     _safeRecordCallBack(cxt, DEFAULT_LIMIT_DB,null,RECORD_FAIL  ,new Exception("record use:"+ config.tag + " init failed1"), true);
                     return;
@@ -697,7 +698,7 @@ public class BuyfullRecorder {
     private void _fetchBuffer(final RecordContext cxt){
         int expectReadSize = _lastRecordExpectSize;
         if ((_hasExpired(cxt) && isRecording())|| (_lastPCMSize < expectReadSize)){
-            Log.d(TAG,"DEBUG1");
+//            Log.d(TAG,"DEBUG1");
             //if record buffer is out dated or not enough, we should wait or timeout
             if ((System.currentTimeMillis() - cxt.timeStamp) > cxt.timeOut){
                 _safeRecordCallBack(cxt,DEFAULT_LIMIT_DB,null,RECORD_TIMEOUT,new Exception("record use:"+ _lastRecordSource + " record time out"), cxt.stopAfterReturn);
@@ -710,17 +711,29 @@ public class BuyfullRecorder {
         }
 
         if (!isRecording()){
-            Log.d(TAG,"DEBUG2");
+//            Log.d(TAG,"DEBUG2");
             _doRecord(-1,-1,cxt);
             return;
         }
 
         Log.d(TAG, "Buffer time stamp: " + _lastBufferTimeStamp);
-        byte[] result = new byte[expectReadSize];
+        final byte[] result = new byte[expectReadSize];
         System.arraycopy(_recordBuffer,_lastPCMSize - expectReadSize,result,0,expectReadSize);
+
+        cxt.callbackHandler.post(new Runnable() {
+            @Override
+            public void run() {
+                _processAndReturn(cxt, result);
+            }
+        });
+
+    }
+
+    private void _processAndReturn(final RecordContext cxt, final byte[] pcm){
         float dB = DEFAULT_LIMIT_DB;
+        int expectReadSize = pcm.length;
         try {
-            dB = getDB(result, expectReadSize, DEFAULT_RECORD_SAMPLE_RATE, RECORD_CHANNEL, RECORD_BITS, true);
+            dB = getDB(pcm, expectReadSize, DEFAULT_RECORD_SAMPLE_RATE, RECORD_CHANNEL, RECORD_BITS, true);
         } catch (Exception e) {
             _safeRecordCallBack(cxt,dB,null,SIGNAL_DB_TOO_LOW  ,  new Exception("record use:"+ _lastRecordSource + " get dB fail"), cxt.stopAfterReturn);
             return;
@@ -735,7 +748,7 @@ public class BuyfullRecorder {
 
         float pcmDB_start = 0;
         try {
-            pcmDB_start = getDB(result, expectReadSize, DEFAULT_RECORD_SAMPLE_RATE, RECORD_CHANNEL, RECORD_BITS, false);
+            pcmDB_start = getDB(pcm, expectReadSize, DEFAULT_RECORD_SAMPLE_RATE, RECORD_CHANNEL, RECORD_BITS, false);
         } catch (Exception e) {
             _safeRecordCallBack(cxt,dB,null,SIGNAL_DB_TOO_LOW  ,  new Exception("record use:"+ _lastRecordSource + " get dB fail"), cxt.stopAfterReturn);
             return;
@@ -747,13 +760,17 @@ public class BuyfullRecorder {
             _safeRecordCallBack(cxt,pcmDB_start,null,SIGNAL_DB_TOO_LOW  ,  new Exception("record use:"+ _lastRecordSource + " get dB fail"), cxt.stopAfterReturn);
             return;
         }
+
         byte[] binData = null;
-        try {
-            binData = buildBin(result, DEFAULT_RECORD_SAMPLE_RATE, _lastRecordPeriod,RECORD_CHANNEL,RECORD_BITS);
-        } catch (Exception e) {
-            _safeRecordCallBack(cxt,pcmDB_start,null,SIGNAL_DB_TOO_LOW  ,  new Exception("record use:"+ _lastRecordSource + " get dB fail"), cxt.stopAfterReturn);
-            return;
+        if (pcm != null){
+            try {
+                binData = buildBin(pcm, DEFAULT_RECORD_SAMPLE_RATE, _lastRecordPeriod,RECORD_CHANNEL,RECORD_BITS);
+            } catch (Exception e) {
+                _safeRecordCallBack(cxt,(dB + pcmDB_start) / 2,null,SIGNAL_DB_TOO_LOW  ,  new Exception("record use:"+ _lastRecordSource + " get dB fail"), cxt.stopAfterReturn);
+                return;
+            }
         }
+
         _safeRecordCallBack(cxt,(dB + pcmDB_start) / 2,binData,NO_ERROR, null, cxt.stopAfterReturn);
 
     }
