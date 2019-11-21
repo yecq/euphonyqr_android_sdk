@@ -74,9 +74,9 @@ public class MainActivity extends AppCompatActivity {
     protected void checkInit(){
         BuyfullSDK sdk = BuyfullSDK.getInstance();
         // appkey和sandbox请向动听员工询问，tokenURL需要自行布署，此处只是DEMO
-//        sdk.setSDKInfo(MyApplication.appKey,MyApplication.isSandbox,MyApplication.tokenURL);
-//        // userID或phoneNumber可以做为数据分析标识通过动听后台API返回，请任意设置一个
-//        sdk.setUserID("13xxxxxxxxx","custom user id");
+        sdk.setSDKInfo(MyApplication.appKey,MyApplication.isSandbox,MyApplication.tokenURL);
+        // userID或phoneNumber可以做为数据分析标识通过动听后台API返回，请任意设置一个
+        sdk.setUserID("13xxxxxxxxx","custom user id");
 
         //检测权限
         PackageManager pkgManager = getPackageManager();
@@ -94,11 +94,16 @@ public class MainActivity extends AppCompatActivity {
 
     private  void doDetect(){
         BuyfullSDK sdk = BuyfullSDK.getInstance();
-//        sdk.setUserID("13xxxxxxxxx","custom user id");
+        sdk.setUserID("13xxxxxxxxx","custom user id");
         if (sdk.isDetecting()){
             resultText.setText("Please retry later");
         }else{
-            BuyfullSDK.getInstance().detect("custom data", new BuyfullSDK.IDetectCallback() {
+            JSONObject options = new JSONObject();
+            try{
+                options.put("autoRetry", false);
+            }catch (Exception e){}
+
+            BuyfullSDK.getInstance().detect(options, new BuyfullSDK.IDetectCallback() {
                 @Override
                 public void onDetect(final float dB,final String json,final Exception error) {
                     //回调不在主线程
@@ -113,7 +118,7 @@ public class MainActivity extends AppCompatActivity {
                             }else {
                                 Log.d(TAG,json);
                                 resultText.setText("got result, signal dB is:" + dB);
-                                /*
+
                                 try {
                                     JSONObject jsonObj = (JSONObject) new JSONTokener(json).nextValue();
                                     lastReqID = jsonObj.getString("reqid");
@@ -129,7 +134,7 @@ public class MainActivity extends AppCompatActivity {
                                     }
                                 } catch (JSONException e) {
                                     e.printStackTrace();
-                                }*/
+                                }
                             }
                         }
                     });

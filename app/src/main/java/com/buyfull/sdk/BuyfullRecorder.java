@@ -13,8 +13,11 @@ import android.util.Log;
 import org.json.JSONObject;
 
 
+import java.io.UnsupportedEncodingException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.Comparator;
 
@@ -130,7 +133,7 @@ public class BuyfullRecorder {
     private float[]                         real;
     private float[]                         imag;
     private LooperThread                    _notifyThread;
-    private byte[]                          _recordBuffer;
+    private volatile byte[]                 _recordBuffer;
     private byte[]                          _tempRecordBuffer;
     private ByteBuffer                      _binBuffer;
     private AudioRecord                     _recorder;
@@ -384,10 +387,12 @@ public class BuyfullRecorder {
         _binBuffer.put((byte) 1);
         _binBuffer.putShort((short) (resultSize & 0xffff));
         byte[] result = new byte[finalSize];
-        if (DEBUG)
-            Log.d(TAG,"bin size " + finalSize);
-
         System.arraycopy(_binBuffer.array(),0,result,0,finalSize);
+        if (DEBUG){
+            Log.d(TAG,"bin size " + finalSize);
+            Log.d(TAG,"bin md5 " + md5Decode32(result));
+
+        }
         return result;
     }
 
@@ -494,7 +499,7 @@ public class BuyfullRecorder {
         };
     }
 
-    private void _record(int source, int duration, RecordContext cxt){
+    private void _record(int source, int duration, final RecordContext cxt){
         if (_hasTestFinished()){
             Message msg = _notifyThread.mHandler.obtainMessage(START_RECORD, source, duration,cxt);
             msg.sendToTarget();
@@ -504,7 +509,7 @@ public class BuyfullRecorder {
         }
     }
 
-    private void _safeRecordCallBack(RecordContext cxt, float dB, byte[] pcm, int errorCode, Exception error, boolean finish){
+    private void _safeRecordCallBack(final RecordContext cxt, float dB, byte[] pcm, int errorCode, Exception error, boolean finish){
         try{
             if (finish){
                 _doStop();
@@ -547,7 +552,7 @@ public class BuyfullRecorder {
         return false;
     }
 
-    private void _doRecord(int source, int duration, RecordContext cxt){
+    private void _doRecord(int source, int duration,final  RecordContext cxt){
         if (!_hasTestFinished()){
             _doTestRecord(source, duration, cxt);
             return;
@@ -665,9 +670,9 @@ public class BuyfullRecorder {
             }
 
             readSize = offset;
-            if (DEBUG){
-                Log.d(TAG,"update frames: " + readSize);
-            }
+
+//            Log.d(TAG,"update frames: " + readSize);
+
         }catch (Exception e){
             e.printStackTrace();
             _doStop();
@@ -677,9 +682,9 @@ public class BuyfullRecorder {
         if ((_lastPCMSize + readSize) >= _recordBuffer.length){
             //trim last half pcm data
             int leftSize = _recordBuffer.length / 2 - readSize;
-            if (DEBUG){
-                Log.d(TAG,"update frames overflow, trim to left size: " + leftSize);
-            }
+
+//            Log.d(TAG,"update frames overflow, trim to left size: " + leftSize);
+
             System.arraycopy(_recordBuffer,_lastPCMSize - leftSize,_recordBuffer,0,leftSize);
             _lastPCMSize = leftSize;
         }
@@ -689,12 +694,13 @@ public class BuyfullRecorder {
         _lastBufferTimeStamp = System.currentTimeMillis();
     }
 
-    private void _fetchBuffer(RecordContext cxt){
+    private void _fetchBuffer(final RecordContext cxt){
         int expectReadSize = _lastRecordExpectSize;
         if ((_hasExpired(cxt) && isRecording())|| (_lastPCMSize < expectReadSize)){
+            Log.d(TAG,"DEBUG1");
             //if record buffer is out dated or not enough, we should wait or timeout
             if ((System.currentTimeMillis() - cxt.timeStamp) > cxt.timeOut){
-                _safeRecordCallBack(cxt,DEFAULT_LIMIT_DB,null,RECORD_TIMEOUT,new Exception("record use:"+ _lastRecordSource + " record time out"), true);
+                _safeRecordCallBack(cxt,DEFAULT_LIMIT_DB,null,RECORD_TIMEOUT,new Exception("record use:"+ _lastRecordSource + " record time out"), cxt.stopAfterReturn);
                 return;
             }else{
                 Message msg = _notifyThread.mHandler.obtainMessage(FETCH_BUFFER, cxt);
@@ -704,66 +710,55 @@ public class BuyfullRecorder {
         }
 
         if (!isRecording()){
+            Log.d(TAG,"DEBUG2");
             _doRecord(-1,-1,cxt);
             return;
         }
 
+        Log.d(TAG, "Buffer time stamp: " + _lastBufferTimeStamp);
         byte[] result = new byte[expectReadSize];
         System.arraycopy(_recordBuffer,_lastPCMSize - expectReadSize,result,0,expectReadSize);
         float dB = DEFAULT_LIMIT_DB;
         try {
             dB = getDB(result, expectReadSize, DEFAULT_RECORD_SAMPLE_RATE, RECORD_CHANNEL, RECORD_BITS, true);
         } catch (Exception e) {
-            e.printStackTrace();
-            _safeRecordCallBack(callback,dB,null,SIGNAL_DB_TOO_LOW  ,  new Exception("record use:"+ config.tag + " get dB fail"), false);
+            _safeRecordCallBack(cxt,dB,null,SIGNAL_DB_TOO_LOW  ,  new Exception("record use:"+ _lastRecordSource + " get dB fail"), cxt.stopAfterReturn);
             return;
         }
         if (dB == THRESHOLD_DB){
-            _safeRecordCallBack(callback,dB,null,NO_RECORD_PERMISSION  ,  new Exception("record use:"+ config.tag + " get dB fail"), true);
+            _safeRecordCallBack(cxt,dB,null,NO_RECORD_PERMISSION  ,  new Exception("record use:"+ _lastRecordSource + " get dB fail"), true);
             return;
-        }else if (dB < DEFAULT_LIMIT_DB){
-            _safeRecordCallBack(callback,dB,null,SIGNAL_DB_TOO_LOW  ,  new Exception("record use:"+ config.tag + " get dB fail"), false);
-            return;
-        }
-        _safeRecordCallBack(callback,dB,result,NO_ERROR, null, false);
-
-        //检测分贝数，太低了说明很可能是没信号，后续不检测
-        if (dB <= LIMIT_DB){
-            if (DEBUG){
-                Log.d(TAG, "pcm db is " + dB);
-                Log.d(TAG,"Almost no signal, return");
-            }
-
-            _safeCallBack(callback,dB,null, null,true);
+        }else if (dB < cxt.limitDB){
+            _safeRecordCallBack(cxt,dB,null,SIGNAL_DB_TOO_LOW  ,  new Exception("record use:"+ _lastRecordSource + " get dB fail"), cxt.stopAfterReturn);
             return;
         }
+
         float pcmDB_start = 0;
         try {
-            pcmDB_start = getDB(pcm, pcm.length, sampleRate, RECORD_CHANNEL,RECORD_BITS,false);
+            pcmDB_start = getDB(result, expectReadSize, DEFAULT_RECORD_SAMPLE_RATE, RECORD_CHANNEL, RECORD_BITS, false);
         } catch (Exception e) {
-            _safeCallBack(callback,pcmDB_start,null, e,true);
-        }
-        //检测分贝数，太低了说明很可能是没信号，后续不检测
-        if (pcmDB_start <= LIMIT_DB){
-            if (DEBUG){
-                Log.d(TAG, "pcm db is " + pcmDB_start);
-                Log.d(TAG,"Almost no signal, return");
-            }
-
-            _safeCallBack(callback,pcmDB_start,null, null,true);
+            _safeRecordCallBack(cxt,dB,null,SIGNAL_DB_TOO_LOW  ,  new Exception("record use:"+ _lastRecordSource + " get dB fail"), cxt.stopAfterReturn);
             return;
         }
-
+        if (pcmDB_start == THRESHOLD_DB){
+            _safeRecordCallBack(cxt,pcmDB_start,null,NO_RECORD_PERMISSION  ,  new Exception("record use:"+ _lastRecordSource + " get dB fail"), true);
+            return;
+        }else if (pcmDB_start < cxt.limitDB){
+            _safeRecordCallBack(cxt,pcmDB_start,null,SIGNAL_DB_TOO_LOW  ,  new Exception("record use:"+ _lastRecordSource + " get dB fail"), cxt.stopAfterReturn);
+            return;
+        }
         byte[] binData = null;
         try {
-            binData = buildBin(pcm, sampleRate, recordPeriodInMS,RECORD_CHANNEL,RECORD_BITS);
+            binData = buildBin(result, DEFAULT_RECORD_SAMPLE_RATE, _lastRecordPeriod,RECORD_CHANNEL,RECORD_BITS);
         } catch (Exception e) {
-            _safeCallBack(callback,dB,null, e,true);
+            _safeRecordCallBack(cxt,pcmDB_start,null,SIGNAL_DB_TOO_LOW  ,  new Exception("record use:"+ _lastRecordSource + " get dB fail"), cxt.stopAfterReturn);
+            return;
         }
+        _safeRecordCallBack(cxt,(dB + pcmDB_start) / 2,binData,NO_ERROR, null, cxt.stopAfterReturn);
 
     }
 
-    private void _doTestRecord(int source, int duration, RecordContext cxt){
+    private void _doTestRecord(int source, int duration,final  RecordContext cxt){
         int audioSource = source;
         int recordPeriod = duration;
 
@@ -1014,4 +1009,21 @@ public class BuyfullRecorder {
         }
     }
 
+    private String md5Decode32(byte[] content) {
+        byte[] hash;
+        try {
+            hash = MessageDigest.getInstance("MD5").digest(content);
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException("NoSuchAlgorithmException",e);
+        }
+        //对生成的16字节数组进行补零操作
+        StringBuilder hex = new StringBuilder(hash.length * 2);
+        for (byte b : hash) {
+            if ((b & 0xFF) < 0x10){
+                hex.append("0");
+            }
+            hex.append(Integer.toHexString(b & 0xFF));
+        }
+        return hex.toString();
+    }
 }
