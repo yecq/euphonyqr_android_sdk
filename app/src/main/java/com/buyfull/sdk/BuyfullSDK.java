@@ -36,7 +36,7 @@ import static com.buyfull.sdk.BuyfullRecorder.DEFAULT_LIMIT_DB;
 import static com.buyfull.sdk.BuyfullRecorder.DEFAULT_RECORD_TIMEOUT;
 
 public class BuyfullSDK {
-    private static final String     TAG = "BUYFULLSDK";
+    private static final String     TAG = "BUYFULL_SDK";
     private static final boolean    DEBUG = true;
     private static final String     SDK_VERSION = "1.0.1";
 

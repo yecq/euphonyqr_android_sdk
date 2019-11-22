@@ -100,7 +100,8 @@ public class MainActivity extends AppCompatActivity {
         }else{
             JSONObject options = new JSONObject();
             try{
-                options.put("firstTimeBoost", true);
+                options.put("alwaysAutoRetry", true);
+//                options.put("firstTimeBoost", true);
 //                options.put("stopAfterReturn", true);
             }catch (Exception e){}
 

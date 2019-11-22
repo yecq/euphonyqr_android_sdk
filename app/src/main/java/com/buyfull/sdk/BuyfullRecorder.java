@@ -547,7 +547,7 @@ public class BuyfullRecorder {
         if (_lastBufferTimeStamp < 0){
             return true;
         }
-        if ((System.currentTimeMillis() - _lastBufferTimeStamp) > cxt.validTimePeriod){
+        if ((System.currentTimeMillis() - _lastBufferTimeStamp) > (cxt.validTimePeriod)){
             return true;
         }
         return false;
@@ -643,36 +643,18 @@ public class BuyfullRecorder {
     }
 
     private void _updateBuffer(AudioRecord record){
-        final int expect_size = RECORD_FETCH_FRAMES * RECORD_BITS / 8;
+        int expect_size = (int)(RECORD_FETCH_FRAMES * RECORD_BITS / 8);
+        _lastBufferTimeStamp = System.currentTimeMillis();
+
         int readSize = 0;
-        int offset = 0;
         try {
-            if (Build.VERSION.SDK_INT >= 23) {
-                do{
-                    readSize = record.read(_tempRecordBuffer, offset, expect_size, AudioRecord.READ_NON_BLOCKING);
-                    if (readSize < 0){
-                        //error
-                        _doStop();
-                        return;
-                    }
-                    offset += readSize;
-                    if ((readSize < expect_size) || ((offset + expect_size) > _tempRecordBuffer.length)){
-                        break;
-                    }
-                }while (true);
-            }else{
-                readSize = record.read(_tempRecordBuffer, 0, expect_size);
-                if (readSize < 0){
-                    //error
-                    _doStop();
-                    return;
-                }
-                offset = readSize;
+            long now = System.nanoTime();
+            readSize = record.read(_tempRecordBuffer, 0, expect_size);
+            if (readSize < 0){
+                //error
+                _doStop();
+                return;
             }
-
-            readSize = offset;
-
-//            Log.d(TAG,"update frames: " + readSize);
 
         }catch (Exception e){
             e.printStackTrace();
@@ -692,7 +674,7 @@ public class BuyfullRecorder {
         //copy temp buffer to record buffer
         System.arraycopy(_tempRecordBuffer,0,_recordBuffer,_lastPCMSize,readSize);
         _lastPCMSize += readSize;
-        _lastBufferTimeStamp = System.currentTimeMillis();
+
     }
 
     private void _fetchBuffer(final RecordContext cxt){
