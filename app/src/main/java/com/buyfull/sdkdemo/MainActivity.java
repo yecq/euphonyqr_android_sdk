@@ -107,7 +107,7 @@ public class MainActivity extends AppCompatActivity {
 
             BuyfullSDK.getInstance().detect(options, new BuyfullSDK.IDetectCallback() {
                 @Override
-                public void onDetect(final float dB,final String json,final Exception error) {
+                public void onDetect(final JSONObject options, final float dB,final String json,final Exception error) {
                     if (error != null){
                         error.printStackTrace();
                         resultText.setText(error.getLocalizedMessage());

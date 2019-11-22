@@ -21,6 +21,7 @@ import org.json.JSONTokener;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.lang.ref.WeakReference;
 import java.net.HttpURLConnection;
 import java.net.NetworkInterface;
 import java.net.URL;
@@ -37,17 +38,18 @@ import static com.buyfull.sdk.BuyfullRecorder.DEFAULT_RECORD_TIMEOUT;
 
 public class BuyfullSDK {
     private static final String     TAG = "BUYFULL_SDK";
-    private static final boolean    DEBUG = true;
-    private static final String     SDK_VERSION = "1.0.1";
+    private static final boolean    DEBUG = false;
+    private static final String     SDK_VERSION = "1.0.2";
 
     public interface IDetectCallback {
         /**
          * 检测完成后回调
+         * @param options   此次录音的参数
          * @param dB        此次录音的分贝数，如果小于LIMIT_DB则不会上传检测
          * @param json      检测成功返回JSON数据，可能为空
          * @param error     如果有错误则不为空
          */
-        void onDetect(final float dB, final String json, final Exception error);
+        void onDetect(final JSONObject options, final float dB, final String json, final Exception error);
     }
 
     private class DetectContext{
@@ -57,7 +59,7 @@ public class BuyfullSDK {
         public long                 timeStamp;
         public long                 timeOut = DEFAULT_RECORD_TIMEOUT;
         public boolean              alwaysAutoRetry = false;//如果解析失败是否自动重试
-        public boolean              firstTimeBoost = false;//第一次解析是否自动重试
+        public boolean              firstTimeBoost = false;//第一次解析是否加速
         public JSONObject           options;
         public DetectContext(JSONObject _options, IDetectCallback cb){
             callback = cb;
@@ -79,6 +81,7 @@ public class BuyfullSDK {
         public JSONObject getRecorderOptions(){
             JSONObject recorderResult = new JSONObject();
             try {
+                recorderResult.put("cxt", new WeakReference<DetectContext>(this));
                 if (!options.isNull("limitdB"))
                     recorderResult.put("limitdB",options.get("limitdB"));
 
@@ -150,14 +153,14 @@ public class BuyfullSDK {
     public void detect(JSONObject options, final IDetectCallback callback){
         if (callback == null)   return;
         if (isDetecting()){
-            callback.onDetect(DEFAULT_LIMIT_DB,null, new Exception("don't call detect while detecting"));
+            callback.onDetect(options, DEFAULT_LIMIT_DB,null, new Exception("don't call detect while detecting"));
             return;
         }
         Message msg = _notifyThread.mHandler.obtainMessage(DETECT, new DetectContext(options,callback));
         msg.sendToTarget();
     }
 
-    private void _detect(final DetectContext cxt, boolean isRetry){
+    private void _detect(DetectContext cxt, boolean isRetry){
         //以免重复调用
         if (_token == null && _isInitingToken){
             _safeCallBackFail(cxt, DEFAULT_LIMIT_DB, "initing buyfull sdk, please wait", false);
@@ -198,67 +201,65 @@ public class BuyfullSDK {
 
         if (_token != null && !_token.isEmpty() && _hasMicphonePermission && (!_isDetecting || isRetry)) {
             _isDetecting = true;
-            BuyfullRecorder.getInstance().record(cxt.getRecorderOptions(),new BuyfullRecorder.IRecordCallback() {
-                @Override
-                public void onRecord(final float dB, final byte[] bin, final BuyfullRecorder.RecordException error) {
-                    if (error != null){
-                        _safeCallBack(cxt,dB,null, error,true);
-                        return;
-                    }
-                    if (bin == null){
-                        _safeCallBackFail(cxt,dB,"record fail", true);
-                        return;
-                    }
-                    if (DEBUG) {
-                        Log.d(TAG, "pcm db is " + dB);
-                    }
-
-                    String rawJson = null;
-                    try {
-                        rawJson = detectRequest(bin,_appKey,_token,_isSandbox,_deviceInfo,_phone,_userID,cxt.customData);
-                    } catch (Exception e) {
-                        _safeCallBack(cxt,dB,null, e,true);
-                    }
-
-                    String jsonResult = null;
-                    try {
-                        jsonResult = handleJSONResult(rawJson);
-                    } catch (Exception e) {
-                        _safeCallBack(cxt,dB,null, e,true);
-                    }
-
-                    if ((cxt.alwaysAutoRetry || (cxt.firstTimeBoost && !_hasSuccessGotResult) )&& ((System.currentTimeMillis() - cxt.timeStamp) < cxt.timeOut)){
-                        //check if alltags is empty, and autoretry if not timeout
-                        boolean needRetry = true;
-
-                        if (jsonResult != null){
-                            try{
-                                JSONObject jsonObj = (JSONObject) new JSONTokener(jsonResult).nextValue();
-                                int tagCount = jsonObj.getInt("count");
-                                if (tagCount > 0)  {
-                                    _hasSuccessGotResult = true;
-                                    needRetry = false;
-                                }
-                            } catch (JSONException e) {
-                                e.printStackTrace();
-                            }
-                        }
-                        if (needRetry){
-                            if (DEBUG){
-                                Log.d(TAG,"Auto retry");
-                            }
-                            Message msg = _notifyThread.mHandler.obtainMessage(RETRY, cxt);
-                            msg.sendToTarget();
-                            return;
-                        }
-                    }
-
-                    _safeCallBack(cxt,dB,jsonResult,null,true);
-                }
-            });
+            BuyfullRecorder.getInstance().record(cxt.getRecorderOptions(), _notifyThread);
         }
     }
 
+    private void onRecord(DetectContext cxt, float dB, byte[] bin, BuyfullRecorder.RecordException error){
+        if (error != null){
+            _safeCallBack(cxt,dB,null, error,true);
+            return;
+        }
+        if (bin == null){
+            _safeCallBackFail(cxt,dB,"record fail", true);
+            return;
+        }
+        if (DEBUG) {
+            Log.d(TAG, "pcm db is " + dB);
+        }
+
+        String rawJson = null;
+        try {
+            rawJson = detectRequest(bin,_appKey,_token,_isSandbox,_deviceInfo,_phone,_userID,cxt.customData);
+        } catch (Exception e) {
+            _safeCallBack(cxt,dB,null, e,true);
+        }
+
+        String jsonResult = null;
+        try {
+            jsonResult = handleJSONResult(rawJson);
+        } catch (Exception e) {
+            _safeCallBack(cxt,dB,null, e,true);
+        }
+
+        if ((cxt.alwaysAutoRetry || (cxt.firstTimeBoost && !_hasSuccessGotResult) )&& ((System.currentTimeMillis() - cxt.timeStamp) < cxt.timeOut)){
+            //check if alltags is empty, and autoretry if not timeout
+            boolean needRetry = true;
+
+            if (jsonResult != null){
+                try{
+                    JSONObject jsonObj = (JSONObject) new JSONTokener(jsonResult).nextValue();
+                    int tagCount = jsonObj.getInt("count");
+                    if (tagCount > 0)  {
+                        _hasSuccessGotResult = true;
+                        needRetry = false;
+                    }
+                } catch (JSONException e) {
+                    e.printStackTrace();
+                }
+            }
+            if (needRetry){
+                if (DEBUG){
+                    Log.d(TAG,"Auto retry");
+                }
+                Message msg = _notifyThread.mHandler.obtainMessage(RETRY, cxt);
+                msg.sendToTarget();
+                return;
+            }
+        }
+
+        _safeCallBack(cxt,dB,jsonResult,null,true);
+    }
     /**
      * 请求TOKEN，有了TOKEN后才能使用BUYFULL SDK
      * @param tokenURL      需要自行布署
@@ -515,7 +516,7 @@ public class BuyfullSDK {
     private static final int RETRY = 6;
     private static final int DEBUG_UPLOAD = 100;
 
-    private static class LooperThread extends Thread{
+    private static class LooperThread extends Thread implements BuyfullRecorder.IRecordCallback {
         public Handler mHandler;
         public volatile boolean threadStarted;
         public volatile boolean threadEnded;
@@ -565,6 +566,24 @@ public class BuyfullSDK {
             Looper.loop();
             threadEnded = false;
         }
+
+        @Override
+        public void onRecord(JSONObject options, float dB, byte[] bin, BuyfullRecorder.RecordException error) {
+            if (instance == null)
+                return;
+            DetectContext cxt = null;
+            try {
+                cxt = ((WeakReference<DetectContext>)options.get("cxt")).get();
+            }catch (Exception e){
+                e.printStackTrace();
+                return;
+            }
+            if (cxt == null){
+                Log.e(TAG,"cxt is null, not allowed");
+                return;
+            }
+            instance.onRecord(cxt, dB, bin, error);
+        }
     }
     private void init(){
         _notifyThread = new LooperThread("BuyfullLoop");
@@ -581,29 +600,62 @@ public class BuyfullSDK {
         }
     }
 
-    private void _safeCallBackFail(DetectContext cxt, float dB, String exception, boolean finish){
+    private void _safeCallBackFail(DetectContext cxt, final float dB, String exception, boolean finish){
         try{
             if (finish){
                 _isDetecting = false;
+                if (DEBUG){
+                    Log.d(TAG,"Detect use time: " + (System.currentTimeMillis() - cxt.timeStamp));
+                }
             }
-            cxt.callback.onDetect(dB,null,new Exception(exception));
+            final IDetectCallback cb = cxt.callback;
+            final JSONObject options = cxt.options;
+            final Exception err = new Exception(exception);
+            Handler handler = cxt.callbackHandler;
+
+            cxt.callback = null;
+            cxt.callbackHandler = null;
+            cxt.options = null;
+
+            handler.post(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        cb.onDetect(options, dB,null,err);
+                    }catch (Exception e){
+                        e.printStackTrace();
+                    }
+                }
+            });
         }catch (Exception e){
             e.printStackTrace();
         }
     }
 
-    private void _safeCallBack(final DetectContext cxt,final float dB,final String json,final Exception error, boolean finish){
-        if (DEBUG){
-            Log.d(TAG,"Detect use time: " + (System.currentTimeMillis() - cxt.timeStamp));
-        }
+    private void _safeCallBack(DetectContext cxt,final float dB,final String json,final Exception error, boolean finish){
         try{
             if (finish){
                 _isDetecting = false;
+                if (DEBUG){
+                    Log.d(TAG,"Detect use time: " + (System.currentTimeMillis() - cxt.timeStamp));
+                }
             }
-            cxt.callbackHandler.post(new Runnable() {
+            final IDetectCallback cb = cxt.callback;
+            final JSONObject options = cxt.options;
+            Handler handler = cxt.callbackHandler;
+
+            cxt.callback = null;
+            cxt.callbackHandler = null;
+            cxt.options = null;
+
+            handler.post(new Runnable() {
                 @Override
                 public void run() {
-                    cxt.callback.onDetect(dB,json,error);
+                    try {
+                        cb.onDetect(options, dB,json,error);
+                    }catch (Exception e){
+                        e.printStackTrace();
+                    }
                 }
             });
 

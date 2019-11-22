@@ -53,24 +53,27 @@ public class BuyfullRecorder {
     public interface IRecordCallback {
         /**
          * 录音结束后回调
+         * @param options   调用时的参数
          * @param dB        此次录音的分贝数
          * @param bin       压缩后BIN数据
          * @param error     如果有错误则不为空
          */
-        void onRecord(final float dB, final byte[] bin, final RecordException error);
+        void onRecord(final JSONObject options, final float dB, final byte[] bin, final RecordException error);
     }
 
     private class RecordContext{
         public Handler              callbackHandler;
         public IRecordCallback      callback;
+        public JSONObject           options;
         public long                 timeStamp;
         public float                limitDB = DEFAULT_LIMIT_DB;
         public long                 timeOut = DEFAULT_RECORD_TIMEOUT;
         public long                 validTimePeriod = DEFAULT_VALID_TIME_PERIOD;
         public boolean              stopAfterReturn = false;//是否在录音返回后自动停止录音
 
-        public RecordContext(JSONObject options, IRecordCallback cb){
+        public RecordContext(JSONObject _options, IRecordCallback cb){
             callback = cb;
+            options = _options;
             timeStamp = System.currentTimeMillis();
             callbackHandler = new Handler();
             try {
@@ -123,12 +126,12 @@ public class BuyfullRecorder {
 
     ////////////////////////////////////////////////////////////////////////
     private static final String     TAG = "BUYFULL_RECORDER";
-    private static final boolean    DEBUG = true;
+    private static final boolean    DEBUG = false;
 
     private static final float Pi = 3.14159265358979f;
     private static final int N_WAVE = (64*1024);
     private static final int LOG2_N_WAVE = (6+10);
-    private static final String SDK_VERSION = "1.0.1";
+    private static final String SDK_VERSION = "1.0.2";
 
     private volatile static BuyfullRecorder instance;
     private static float                    fsin[];
@@ -511,16 +514,34 @@ public class BuyfullRecorder {
         }
     }
 
-    private void _safeRecordCallBack(final RecordContext cxt,final float dB,final byte[] pcm, final int errorCode, final Exception error, boolean finish){
+    private void _safeRecordCallBack(RecordContext cxt,final float dB,final byte[] pcm, int errorCode, Exception error, boolean finish){
         try{
             if (finish){
                 stop();
             }
-            if (error != null){
-                cxt.callback.onRecord(dB,null,new RecordException(errorCode, error));
-            }else{
-                cxt.callback.onRecord(dB,pcm,null);
-            }
+            Handler handler = cxt.callbackHandler;
+            final RecordException re = (error == null)? null: new RecordException(errorCode, error);
+            final JSONObject options = cxt.options;
+            final IRecordCallback cb = cxt.callback;
+
+            cxt.callbackHandler = null;
+            cxt.options = null;
+            cxt.callback = null;
+
+            handler.post(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        if (re != null){
+                            cb.onRecord(options, dB,null,re);
+                        }else{
+                            cb.onRecord(options, dB,pcm,null);
+                        }
+                    }catch (Exception e){
+                        e.printStackTrace();
+                    }
+                }
+            });
         }catch (Exception e){
             e.printStackTrace();
         }
@@ -698,20 +719,14 @@ public class BuyfullRecorder {
             return;
         }
 
-        Log.d(TAG, "Buffer time stamp: " + _lastBufferTimeStamp);
+//        Log.d(TAG, "Buffer time stamp: " + _lastBufferTimeStamp);
         final byte[] result = new byte[expectReadSize];
         System.arraycopy(_recordBuffer,_lastPCMSize - expectReadSize,result,0,expectReadSize);
 
-        cxt.callbackHandler.post(new Runnable() {
-            @Override
-            public void run() {
-                _processAndReturn(cxt, result);
-            }
-        });
-
+        _processAndReturn(cxt, result);
     }
 
-    private void _processAndReturn(final RecordContext cxt, final byte[] pcm){
+    private void _processAndReturn(RecordContext cxt, byte[] pcm){
         float dB = DEFAULT_LIMIT_DB;
         int expectReadSize = pcm.length;
         try {
