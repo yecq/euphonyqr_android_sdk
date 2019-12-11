@@ -21,7 +21,6 @@ import org.json.JSONTokener;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
-import java.lang.ref.WeakReference;
 import java.net.HttpURLConnection;
 import java.net.NetworkInterface;
 import java.net.URL;
@@ -81,7 +80,7 @@ public class BuyfullSDK {
         public JSONObject getRecorderOptions(){
             JSONObject recorderResult = new JSONObject();
             try {
-                recorderResult.put("cxt", new WeakReference<DetectContext>(this));
+                recorderResult.put("cxt", this);
                 if (!options.isNull("limitdB"))
                     recorderResult.put("limitdB",options.get("limitdB"));
 
@@ -349,8 +348,8 @@ public class BuyfullSDK {
             String cmd = "soundtag-decode/decodev7/Android/BIN/" + toURLEncoded(json);
             URL url = new URL("https://api.euphonyqr.com/api/decode2?cmd=" + cmd);
 
-            url = new URL("https://testeast.euphonyqr.com/test/api/decode_test?cmd=" + cmd);
-            url = new URL("http://192.168.110.6:8081/api/decode2?cmd=" + cmd);
+//            url = new URL("https://testeast.euphonyqr.com/test/api/decode_test?cmd=" + cmd);
+//            url = new URL("http://192.168.110.6:8081/api/decode2?cmd=" + cmd);
             connection = (HttpURLConnection) url.openConnection();
             connection.setRequestMethod("POST");
             connection.setConnectTimeout(1000);
@@ -573,11 +572,12 @@ public class BuyfullSDK {
                 return;
             DetectContext cxt = null;
             try {
-                cxt = ((WeakReference<DetectContext>)options.get("cxt")).get();
+                cxt = (DetectContext)options.get("cxt");
             }catch (Exception e){
                 e.printStackTrace();
                 return;
             }
+            options.remove("cxt");
             if (cxt == null){
                 Log.e(TAG,"cxt is null, not allowed");
                 return;
