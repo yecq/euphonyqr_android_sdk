@@ -6,81 +6,22 @@
 1. 准备</br>
   请和动听工作人员联系获取售前服务文档，并全部完成。如果只是想尝试一下SDK，可以跳过这一步。
 2. 集成SDK</br>
-  用AndroidStudio打开示例工程，编译运行，SDK代码是BuyfullSDK.java，示例代码在MyApplication.java和MainActivity.java中, PermissionPageUtils.java是帮助打开权限设置页面的，仅供参考：</br>
+  用AndroidStudio打开示例工程，编译运行，SDK代码是BuyfullRecorder.java，示例代码在MyApplication.java和MainActivity.java中, PermissionPageUtils.java是帮助打开权限设置页面的，仅供参考：</br>
+  BuyfullSDK.java是辅助代码，帮助用户把整个检测流程整合，可自行修改，其中的detectRequest（51行)为示例布署代码，请自行根据业务逻辑修改</br>
+  BuyfullSDK.java中的检测流程代码在 private void _detect 和 private void onRecord 中。</br>
   参照示例代码，大体业务流程是：</br></br>
   1）初始化：参考MyApplication.java,在onCreate中初始化sdk，需要context，同时传入的参数有</br>
   (a) appkey | string | 注册了动听帐号后可以在个人中心->应用管理中查看appkey</br>
-  (b) isSandbox | bool | appkey是官网的填false，是测试服的填true</br>
-  (c) tokenURL | string | 请自行布署一个后端服务器用来获取token，访问动听api需要token， 具体请见 https://github.com/haoboyang/qs_wx_token</br></br>
-  2）(可选)设置userID或phoneNumber，做为数据分析标识通过动听后台API返回。</br></br>
-  3）授权：检测并引导用户授权，期间需要多次调用BuyfullSDK.getInstance().setContext()，本SDK不保存Context，不会内存泄露。</br></br>
-  4）检测：参考MainActivity.java中的doDetect方法，调用detect，等待返回结果。如果想要反复检测，可以在检测回调后立即在主线程再次调用detect。可选的参数有customData(string类型，可以通过动听后台API加上requestID查询返回)</br></br>
-  5 ) 处理返回结果：MainActivity.java第103行 </br> 
-    一共3个返回参数: (final float dB,final String json,final Exception error)</br>
-    (a) dB表示录音的分贝数，一般 -90以上信号质量较好，-120及以下基本为无信号</br>
-    (b) error为出错说明信息，没有错误时为null</br>
-    (c) json为返回数据，没有结果或出错是为nnull，格式为：</br>
-    {</br>
-        "reqid":"xxxxx", // 动听返回的requestID，可用于查询</br>
-        "count":2, // 有效结果的总数(result数组大小）</br>
-        "allTags":["tag3","tag1","tag2"], // 所有有效结果中的tags的去重集合</br></br>
-        "result":[ // 所有有效的结果，并且按power(音量分贝)排序</br>
-            {</br>
-                "channel":3, // 信道号：从0开始</br>
-                "power":-89, // 此信道的分贝数</br>
-                "tags":["tag3","tag1"] // 检测返回的结果，可以有多个字符串</br>
-            },</br>
-            {</br>
-                "channel":1,</br>
-                "power":-102,</br>
-                "tags":["tag2","tag1"]</br>
-            },</br>
-        ],</br></br>
-        "sortByPowerResult":[ // 包含有效和无效的结果，按power(音量分贝)排序</br>
-            {</br>
-                "channel":3,</br>
-                "power":-89,</br>
-                "tags":["tag3","tag1"]</br>
-            },</br>
-            {</br>
-                "channel":1,</br>
-                "power":-102,</br>
-                "tags":["tag2","tag1"]</br>
-            },</br>
-            {</br>
-                "channel":0,</br>
-                "power":-108,</br>
-                "tags":[]</br>
-            },</br>
-            {</br>
-                "channel":2,</br>
-                "power":-120,</br>
-                "tags":[]</br>
-            },</br>
-        ],</br></br>
-        "rawResult":[// 包含有效和无效的结果，按channel递增</br>
-            {</br>
-                "channel":0,</br>
-                "power":-108,</br>
-                "tags":[]</br>
-            },</br>
-            {</br>
-                "channel":1,</br>
-                "power":-102,</br>
-                "tags":["tag2","tag1"]</br>
-            },</br>
-            {</br>
-                "channel":2,</br>
-                "power":-120,</br>
-                "tags":[]</br>
-            },</br>
-            {</br>
-                "channel":3,</br>
-                "power":-89,</br>
-                "tags":["tag3","tag1"]</br>
-            },</br>
-        ],</br></br>
-    }</br></br>
+  (b) tokenURL | string | 请自行布署一个后端服务器用来获取token，访问动听api需要token， 具体请见 https://github.com/haoboyang/qs_wx_token</br>
+  (c) detectURL | string | 请自行布署一个后端服务器用来获取检测结果，访问动听api需要appkey和seckey， 具体请见 https://github.com/haoboyang/qs_wx_token</br></br>
+  2）授权：检测并引导用户授权，期间需要多次调用BuyfullSDK.getInstance().setContext()，本SDK不保存Context，不会内存泄露。</br></br>
+  3）检测：参考MainActivity.java中的doDetect方法，调用detect，等待返回结果。如果想要反复检测，可以在检测回调后立即在主线程再次调用detect。可选的参数有customData(string类型，可以通过动听后台API加上requestID查询返回)</br></br>
+  4 ) 处理返回结果：MainActivity.java第103行 </br>
+    一共4个返回参数: (final JSONObject options, final float dB,final String result,final Exception error)</br>
+    (a) options是检测时传入的参数
+    (b) dB表示录音的分贝数，一般 -90以上信号质量较好，-120及以下基本为无信号</br>
+    (c) result为返回数据，根据各自的业务逻辑不同而异</br>
+    (d) error为出错说明信息，没有错误时为null</br>
 
 3. 测试</br>
   从动听工作人员处取得测试音频或测试设备，测试音频请用mac电脑（IBM，联想，三星电脑不行）或专业音响，蓝牙音响播放，测试设备使用方法请咨询动听工作人员。</br></br>

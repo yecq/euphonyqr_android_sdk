@@ -68,16 +68,16 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        BuyfullSDK.destory();
         super.onDestroy();
     }
+
+
     //检查权限后初始化
     protected void checkInit(){
         BuyfullSDK sdk = BuyfullSDK.getInstance();
         // appkey和sandbox请向动听员工询问，tokenURL需要自行布署，此处只是DEMO
-        sdk.setSDKInfo(MyApplication.appKey,MyApplication.isSandbox,MyApplication.tokenURL);
-        // userID或phoneNumber可以做为数据分析标识通过动听后台API返回，请任意设置一个
-        sdk.setUserID("13xxxxxxxxx","custom user id");
-
+        sdk.setSDKInfo(MyApplication.appKey,MyApplication.tokenURL, MyApplication.detectURL);
         //检测权限
         PackageManager pkgManager = getPackageManager();
         // read phone state用于获取 imei 设备信息
@@ -94,14 +94,15 @@ public class MainActivity extends AppCompatActivity {
 
     private  void doDetect(){
         BuyfullSDK sdk = BuyfullSDK.getInstance();
-        sdk.setUserID("13xxxxxxxxx","custom user id");
         if (sdk.isDetecting()){
             resultText.setText("Please retry later");
         }else{
             JSONObject options = new JSONObject();
             try{
-                options.put("alwaysAutoRetry", true);
-//                options.put("firstTimeBoost", true);
+                options.put("customData", "anything you want");
+                //以下参数会对检测性能有影响
+//                options.put("alwaysAutoRetry", true);
+                options.put("firstTimeBoost", true);
 //                options.put("stopAfterReturn", true);
             }catch (Exception e){}
 
@@ -119,17 +120,9 @@ public class MainActivity extends AppCompatActivity {
 
                         try {
                             JSONObject jsonObj = (JSONObject) new JSONTokener(json).nextValue();
-                            lastReqID = jsonObj.getString("reqid");
-                            int tagCount = jsonObj.getInt("count");
-                            if (tagCount > 0){
-                                JSONArray allTags = jsonObj.getJSONArray("allTags");
-                                resultText.setText("RequestID is:" + lastReqID + "\nTest result is:" + allTags.join(","));
-                            }else{
-                                JSONArray sortedResults = jsonObj.getJSONArray("sortByPowerResult");
-                                JSONObject result1 = sortedResults.getJSONObject(0);
-                                JSONObject result2 = sortedResults.getJSONObject(1);
-                                resultText.setText("RequestID is:" + lastReqID + "\nTest result is null, power is (dB):" + result1.getDouble("power") + " | " + result2.getDouble("power"));
-                            }
+                            lastReqID = jsonObj.getString("record_id");
+                            String msg = jsonObj.getString("msg");
+                            resultText.setText(json);
                         } catch (JSONException e) {
                             e.printStackTrace();
                         }

@@ -99,6 +99,14 @@ public class BuyfullRecorder {
         }
         return instance;
     }
+
+    public synchronized static void destory(){
+        if (instance != null){
+            instance._destory();
+            instance = null;
+        }
+    }
+
     /**
      * 当前是否正在录音检测
      * @return
@@ -131,25 +139,28 @@ public class BuyfullRecorder {
     private static final float Pi = 3.14159265358979f;
     private static final int N_WAVE = (64*1024);
     private static final int LOG2_N_WAVE = (6+10);
-    private static final String SDK_VERSION = "1.0.2";
+    private static final String SDK_VERSION = "1.0.4";
 
     private volatile static BuyfullRecorder instance;
     private static float                    fsin[];
     private float[]                         real;
     private float[]                         imag;
     private LooperThread                    _notifyThread;
+    private LooperThread                    _recordThread;
     private volatile byte[]                 _recordBuffer;
-    private byte[]                          _tempRecordBuffer;
+    private volatile byte[]                 _tempRecordBuffer;
     private ByteBuffer                      _binBuffer;
-    private AudioRecord                     _recorder;
-    private long                            _lastBufferTimeStamp;
+    private volatile AudioRecord            _recorder;
+    private volatile long                   _lastBufferTimeStamp;
 
     private static final int START_RECORD = 1;
     private static final int STOP_RECORD = 2;
     private static final int START_TEST_RECORD = 3;
     private static final int FETCH_BUFFER = 4;
+    private static final int UPDATE_BUFFER = 5;
+    private static final int DESTORY = 6;
 
-    private static class LooperThread extends Thread implements AudioRecord.OnRecordPositionUpdateListener{
+    private static class LooperThread extends Thread{
         public Handler mHandler;
         public volatile boolean threadStarted;
         public volatile boolean threadEnded;
@@ -191,6 +202,13 @@ public class BuyfullRecorder {
                                 instance._fetchBuffer((RecordContext)msg.obj);
                             }
                             break;
+
+                        case UPDATE_BUFFER:
+                            if (instance != null) {
+                                instance._updateBuffer(instance._recorder);
+                            }
+                            break;
+                        case DESTORY:
                         default:
                             Looper.myLooper().quit();
                     }
@@ -199,18 +217,6 @@ public class BuyfullRecorder {
             threadStarted = true;
             Looper.loop();
             threadEnded = false;
-        }
-
-        @Override
-        public void onMarkerReached(AudioRecord audioRecord) {
-
-        }
-
-        @Override
-        public void onPeriodicNotification(AudioRecord audioRecord) {
-            if (instance != null) {
-                instance._updateBuffer(audioRecord);
-            }
         }
     }
 
@@ -227,9 +233,13 @@ public class BuyfullRecorder {
         imag = new float[N_WAVE];
 
         _initRecordConfig();
-        _notifyThread = new LooperThread("BuyfullRecorder");
+        _notifyThread = new LooperThread("BuyfullRecorder1");
         _notifyThread.start();
-        while (!_notifyThread.threadStarted)
+
+        _recordThread = new LooperThread("BuyfullRecorder2");
+        _recordThread.start();
+
+        while (!(_notifyThread.threadStarted && _recordThread.threadStarted))
         {
             try{
                 Thread.sleep(100);
@@ -244,6 +254,23 @@ public class BuyfullRecorder {
             fsin[i] = (float)Math.sin(2*Pi/N_WAVE*i);
         }
 
+        Message msg = _recordThread.mHandler.obtainMessage(UPDATE_BUFFER);
+        _recordThread.mHandler.sendMessage(msg);
+    }
+
+    private void _destory(){
+        _notifyThread.mHandler.obtainMessage(DESTORY).sendToTarget();
+        _recordThread.mHandler.obtainMessage(DESTORY).sendToTarget();
+        while (!(_notifyThread.threadEnded && _recordThread.threadEnded))
+        {
+            try{
+                Thread.sleep(100);
+            }
+            catch (Exception e)
+            {
+
+            }
+        }
     }
 
     private static final float THRESHOLD_DB = -150;
@@ -448,11 +475,11 @@ public class BuyfullRecorder {
 
     private int _recordTestIndex = 0;
     private int _preferSampleRate = DEFAULT_RECORD_SAMPLE_RATE;
-    private int _lastPCMSize = 0;
-    private String _lastRecordSource = "";
-    private int _lastRecordPeriod = 0;
-    private int _lastRecordExpectSize = 0;
-    private long _lastRecordStartTime = -1;
+    private volatile int _lastPCMSize = 0;
+    private volatile String _lastRecordSource = "";
+    private volatile int _lastRecordPeriod = 0;
+    private volatile int _lastRecordExpectSize = 0;
+    private volatile long _lastRecordStartTime = -1;
 
     private void _initRecordConfig(){
         if (_recordConfigComparator != null)
@@ -608,7 +635,7 @@ public class BuyfullRecorder {
         if (_recorder == null){
             _lastBufferTimeStamp = -1;
             try{
-                _recorder = new AudioRecord(audioSource, _preferSampleRate,AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT,256 * 1024);
+                _recorder = new AudioRecord(audioSource, _preferSampleRate,AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT,512 * 1024);
                 if (_recorder.getState() != AudioRecord.STATE_INITIALIZED){
                     _safeRecordCallBack(cxt, DEFAULT_LIMIT_DB,null,RECORD_FAIL  ,new Exception("record use:"+ config.tag + " init failed1"), true);
                     return;
@@ -617,9 +644,6 @@ public class BuyfullRecorder {
                 _safeRecordCallBack(cxt, DEFAULT_LIMIT_DB,null,RECORD_FAIL  ,  new Exception("record use:"+ config.tag + " init failed1"), true);
                 return;
             }
-
-            _recorder.setPositionNotificationPeriod(RECORD_FETCH_FRAMES);
-            _recorder.setRecordPositionUpdateListener(_notifyThread,_notifyThread.mHandler);
         }
         AudioRecord record = _recorder;
 
@@ -650,22 +674,32 @@ public class BuyfullRecorder {
                 _safeRecordCallBack(cxt, DEFAULT_LIMIT_DB,null,RECORD_FAIL,new Exception("record use:"+ config.tag + " init failed3"), true);
                 return;
             }
-            _lastRecordStartTime = System.currentTimeMillis();
-            _lastRecordSource = config.tag;
-            _lastRecordPeriod = recordPeriod;
-            _lastPCMSize = 0;
-            int expectReadSize = (realSampleRate * recordPeriod * (RECORD_BITS / 8) )/ 1000;
-            if ((expectReadSize % 2) == 1)
-                --expectReadSize;
-            _lastRecordExpectSize = expectReadSize;
+
+            synchronized (_recordBuffer) {
+                _lastRecordStartTime = System.currentTimeMillis();
+                _lastRecordSource = config.tag;
+                _lastRecordPeriod = recordPeriod;
+                _lastPCMSize = 0;
+                int expectReadSize = (realSampleRate * recordPeriod * (RECORD_BITS / 8)) / 1000;
+                if ((expectReadSize % 2) == 1)
+                    --expectReadSize;
+                _lastRecordExpectSize = expectReadSize;
+            }
         }
         Message msg = _notifyThread.mHandler.obtainMessage(FETCH_BUFFER, cxt);
         _notifyThread.mHandler.sendMessageDelayed(msg,DEFAULT_VALID_TIME_PERIOD);
     }
 
     private void _updateBuffer(AudioRecord record){
+        if (!isRecording()){
+            if (DEBUG)
+                Log.d("audio rec", "audio recorder update buffer empty return");
+            Message msg = _recordThread.mHandler.obtainMessage(UPDATE_BUFFER);
+            _recordThread.mHandler.sendMessageDelayed(msg, 1000);
+            return;
+        }
+
         int expect_size = (int)(RECORD_FETCH_FRAMES * RECORD_BITS / 8);
-        _lastBufferTimeStamp = System.currentTimeMillis();
 
         int readSize = 0;
         try {
@@ -683,46 +717,54 @@ public class BuyfullRecorder {
             return;
         }
 
-        if ((_lastPCMSize + readSize) >= _recordBuffer.length){
-            //trim last half pcm data
-            int leftSize = _recordBuffer.length / 2 - readSize;
+        long timeStamp = System.currentTimeMillis();
+        synchronized (_recordBuffer){
+            _lastBufferTimeStamp = timeStamp;
+            if ((_lastPCMSize + readSize) >= _recordBuffer.length){
+                //trim last half pcm data
+                int leftSize = _recordBuffer.length / 2 - readSize;
 
 //            Log.d(TAG,"update frames overflow, trim to left size: " + leftSize);
 
-            System.arraycopy(_recordBuffer,_lastPCMSize - leftSize,_recordBuffer,0,leftSize);
-            _lastPCMSize = leftSize;
+                System.arraycopy(_recordBuffer,_lastPCMSize - leftSize,_recordBuffer,0,leftSize);
+                _lastPCMSize = leftSize;
+            }
+            //copy temp buffer to record buffer
+            System.arraycopy(_tempRecordBuffer,0,_recordBuffer,_lastPCMSize,readSize);
+            _lastPCMSize += readSize;
         }
-        //copy temp buffer to record buffer
-        System.arraycopy(_tempRecordBuffer,0,_recordBuffer,_lastPCMSize,readSize);
-        _lastPCMSize += readSize;
-
+        Message msg = _recordThread.mHandler.obtainMessage(UPDATE_BUFFER);
+        _recordThread.mHandler.sendMessage(msg);
     }
 
     private void _fetchBuffer(final RecordContext cxt){
         int expectReadSize = _lastRecordExpectSize;
-        if ((_hasExpired(cxt) && isRecording())|| (_lastPCMSize < expectReadSize)){
+        byte[] result = null;
+        synchronized (_recordBuffer) {
+
+            if ((_hasExpired(cxt) && isRecording()) || (_lastPCMSize < expectReadSize)) {
 //            Log.d(TAG,"DEBUG1");
-            //if record buffer is out dated or not enough, we should wait or timeout
-            if ((System.currentTimeMillis() - cxt.timeStamp) > cxt.timeOut){
-                _safeRecordCallBack(cxt,DEFAULT_LIMIT_DB,null,RECORD_TIMEOUT,new Exception("record use:"+ _lastRecordSource + " record time out"), cxt.stopAfterReturn);
-                return;
-            }else{
-                Message msg = _notifyThread.mHandler.obtainMessage(FETCH_BUFFER, cxt);
-                _notifyThread.mHandler.sendMessageDelayed(msg,DEFAULT_VALID_TIME_PERIOD / 5);
-                return;
+                //if record buffer is out dated or not enough, we should wait or timeout
+                if ((System.currentTimeMillis() - cxt.timeStamp) > cxt.timeOut) {
+                    _safeRecordCallBack(cxt, DEFAULT_LIMIT_DB, null, RECORD_TIMEOUT, new Exception("record use:" + _lastRecordSource + " record time out"), cxt.stopAfterReturn);
+                    return;
+                } else {
+                    Message msg = _notifyThread.mHandler.obtainMessage(FETCH_BUFFER, cxt);
+                    _notifyThread.mHandler.sendMessageDelayed(msg, DEFAULT_VALID_TIME_PERIOD / 5);
+                    return;
+                }
             }
         }
-
-        if (!isRecording()){
+            if (!isRecording()) {
 //            Log.d(TAG,"DEBUG2");
-            _doRecord(-1,-1,cxt);
-            return;
-        }
-
+                _doRecord(-1, -1, cxt);
+                return;
+            }
+        synchronized (_recordBuffer) {
 //        Log.d(TAG, "Buffer time stamp: " + _lastBufferTimeStamp);
-        final byte[] result = new byte[expectReadSize];
-        System.arraycopy(_recordBuffer,_lastPCMSize - expectReadSize,result,0,expectReadSize);
-
+            result = new byte[expectReadSize];
+            System.arraycopy(_recordBuffer, _lastPCMSize - expectReadSize, result, 0, expectReadSize);
+        }
         _processAndReturn(cxt, result);
     }
 
@@ -763,6 +805,7 @@ public class BuyfullRecorder {
             try {
                 binData = buildBin(pcm, DEFAULT_RECORD_SAMPLE_RATE, _lastRecordPeriod,RECORD_CHANNEL,RECORD_BITS);
             } catch (Exception e) {
+                e.printStackTrace();
                 _safeRecordCallBack(cxt,(dB + pcmDB_start) / 2,null,SIGNAL_DB_TOO_LOW  ,  new Exception("record use:"+ _lastRecordSource + " get dB fail"), cxt.stopAfterReturn);
                 return;
             }
