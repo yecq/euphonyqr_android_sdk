@@ -15,8 +15,8 @@
   (b) tokenURL | string | 请自行布署一个后端服务器用来获取token，访问动听api需要token， 具体请见 https://github.com/haoboyang/qs_wx_token</br>
   (c) detectURL | string | 请自行布署一个后端服务器用来获取检测结果，访问动听api需要appkey和seckey， 具体请见 https://github.com/haoboyang/qs_wx_token</br></br>
   2）授权：检测并引导用户授权，期间需要多次调用BuyfullSDK.getInstance().setContext()，本SDK不保存Context，不会内存泄露。</br></br>
-  3）检测：参考MainActivity.java中的doDetect方法，调用detect，等待返回结果。如果想要反复检测，可以在检测回调后立即在主线程再次调用detect。可选的参数有customData(string类型，可以通过动听后台API加上requestID查询返回)</br></br>
-  4 ) 处理返回结果：MainActivity.java第103行 </br>
+  3）检测：参考MainActivity.java中的doDetect方法，调用detect，等待返回结果。如果想要反复检测，可以在检测回调后立即在主线程再次调用detect。</br></br>
+  4 ) 处理返回结果：MainActivity.java第111行 </br>
     一共4个返回参数: (final JSONObject options, final float dB,final String result,final Exception error)</br>
     (a) options是检测时传入的参数
     (b) dB表示录音的分贝数，一般 -90以上信号质量较好，-120及以下基本为无信号</br>
