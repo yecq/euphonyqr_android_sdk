@@ -54,12 +54,17 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onClick(View view) {
                 if (lastReqID != null){
-                    resultText.setText("RequestID 已经在剪切板中，可以在微信中粘贴给工作人员用做查询");
-//                    BuyfullSDK.getInstance().debugUpload(lastReqID);
-                    ClipboardManager mClipboardManager = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-                    ClipData clipData = ClipData.newPlainText("copy from buyfull sdk", lastReqID);
-                    mClipboardManager.setPrimaryClip(clipData);
-                }else{
+                    try {
+                        BuyfullSDK.getInstance().debugUpload(lastReqID);
+                        ClipboardManager mClipboardManager = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                        ClipData clipData = ClipData.newPlainText("copy from buyfull sdk", lastReqID);
+                        mClipboardManager.setPrimaryClip(clipData);
+                        resultText.setText("RequestID 已经在剪切板中，可以在微信中粘贴给工作人员用做查询");
+
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+               }else{
                     resultText.setText("please detect first");
                 }
             }
@@ -98,8 +103,12 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private  void doDetect(){
+    private  void doDetect(boolean isRetry){
         BuyfullSDK sdk = BuyfullSDK.getInstance();
+        if (isRetry && !sdk.isStarted()){
+            //stop后会回调callback，请小心处理自动重试
+            return;
+        }
         if (sdk.isDetecting()){
             resultText.setText("Please retry later");
         }else{
@@ -166,7 +175,7 @@ public class MainActivity extends AppCompatActivity {
             ActivityCompat.requestPermissions(this, new String[] {Manifest.permission.RECORD_AUDIO},
                     REQUEST_RECORD_PERMISSION);
         } else {
-            doDetect();
+            doDetect(false);
         }
     }
     //请求权限的回调

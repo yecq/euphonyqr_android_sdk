@@ -13,8 +13,6 @@ import android.support.v4.app.ActivityCompat;
 import android.telephony.TelephonyManager;
 import android.util.Log;
 
-import org.json.JSONArray;
-import org.json.JSONException;
 import org.json.JSONObject;
 import org.json.JSONTokener;
 
@@ -25,12 +23,8 @@ import java.net.HttpURLConnection;
 import java.net.NetworkInterface;
 import java.net.URL;
 import java.net.URLEncoder;
-import java.util.Arrays;
 import java.util.Collections;
-import java.util.Comparator;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 
 import static com.buyfull.sdk.BuyfullRecorder.DEFAULT_LIMIT_DB;
 import static com.buyfull.sdk.BuyfullRecorder.DEFAULT_RECORD_TIMEOUT;
@@ -272,6 +266,10 @@ public class BuyfullSDK {
         return _isDetecting;
     }
 
+    public void debugUpload(String record_id){
+        Message msg = _notifyThread.mHandler.obtainMessage(DEBUG_UPLOAD, record_id);
+        msg.sendToTarget();
+    }
     /**
      * 启动检测
      */
@@ -546,6 +544,62 @@ public class BuyfullSDK {
         return null;
     }
 
+    private String _debugUploadRequest(String record_id) throws Exception {
+        byte[] debugPCMData = BuyfullRecorder.getInstance().getDEBUGPCM();
+        if (debugPCMData == null || debugPCMData.length <= 0 || record_id == null){
+            throw new Exception("Please check params");
+        }
+        Log.d(TAG,"debug pcm size:" + debugPCMData.length);
+        HttpURLConnection connection = null;
+        Exception error = null;
+        try {
+            String query = "soundtag-decode/debugupload/" + record_id + "_android_sdk_" + _deviceInfo + "/wav";
+            String fullUrl = "https://testeast.euphonyqr.com/test/api/decode_test?cmd=" + toURLEncoded(query);
+            URL url = new URL(fullUrl);
+
+            connection = (HttpURLConnection) url.openConnection();
+            connection.setRequestMethod("POST");
+            connection.setConnectTimeout(10000);
+            connection.setReadTimeout(10000);
+            connection.setDoOutput(true);
+            connection.setDoInput(true);
+            connection.setUseCaches(false);
+            connection.setInstanceFollowRedirects(false);
+            connection.setRequestProperty("Content-Type","audio/mpeg");
+            connection.setFixedLengthStreamingMode(debugPCMData.length);
+
+            connection.connect();
+            OutputStream outputStream = connection.getOutputStream();
+            outputStream.write(debugPCMData,0,debugPCMData.length);
+            outputStream.flush();
+            outputStream.close();
+
+            int code = connection.getResponseCode();
+            String msg = "";
+            if (code == 200){
+                BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream()));
+                String line = null;
+                while ((line = reader.readLine()) != null) {
+                    msg += line + "\n";
+                }
+                reader.close();
+            }
+            connection.disconnect();
+            if (DEBUG)
+                Log.d(TAG,msg);
+            return msg;
+        }catch (Exception e) {
+            error = e;
+        } finally {
+            if(connection != null) {
+                connection.disconnect(); //将Http连接关闭掉
+            }
+        }
+        if (error != null)
+            throw error;
+        return null;
+    }
+
     ////////////////////////////////////////////////////////////////////////
     private LooperThread                    _notifyThread;
     private volatile static BuyfullSDK      instance;
@@ -605,6 +659,16 @@ public class BuyfullSDK {
                                 instance._detect((DetectContext)msg.obj, true);
                             break;
 
+                        case DEBUG_UPLOAD:
+                            if (instance != null) {
+                                try {
+                                    String result = instance._debugUploadRequest((String)msg.obj);
+                                    Log.d(TAG, "debug upload:" + result);
+                                } catch (Exception e) {
+                                    e.printStackTrace();
+                                }
+                            }
+                            break;
                         case DESTORY:
                         default:
                             Looper.myLooper().quit();
