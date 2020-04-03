@@ -323,7 +323,10 @@ public class BuyfullSDK {
                 if (token != null && !token.isEmpty()){
                     _token = token;
                     _needRefreshToken = false;
-                    Log.d(TAG,"token is:" + token);
+                    if (DEBUG){
+                        Log.d(TAG,"token is:" + token);
+                    }
+
                 }else{
                     _safeCallBackFail(cxt, DEFAULT_LIMIT_DB, "init token fail: " + tokenResult, false);
                 }
@@ -341,18 +344,24 @@ public class BuyfullSDK {
     }
 
     private void onRecord(DetectContext cxt, float dB, byte[] bin, BuyfullRecorder.RecordException error){
+        //如果录音返回出错
         if (error != null){
-            _safeCallBack(cxt,dB,null, error,true);
+            if (DEBUG) {
+                error.printStackTrace();
+            }
+            _safeCallBackFail(cxt,dB,"record_fail", true);
             return;
         }
+        //如果压缩录音返回出错
         if (bin == null){
-            _safeCallBackFail(cxt,dB,"record fail", true);
+            _safeCallBackFail(cxt,dB,"record_fail", true);
             return;
         }
         if (DEBUG) {
             Log.d(TAG, "pcm db is " + dB);
         }
 
+        //发送录音检测请求
         String record_id_result = null;
         try {
             record_id_result = recordRequest(bin, _token);
@@ -364,73 +373,64 @@ public class BuyfullSDK {
             return;
         }
 
+        //处理录音检测结果
         JSONObject record_id_json = null;
         String record_id_url = null;
         try{
             record_id_json = (JSONObject) new JSONTokener(record_id_result).nextValue();
             String msg = record_id_json.getString("msg");
-            if (msg != "ok" && msg != "no_result"){
-                Log.d(TAG,"server return error msg:" + record_id_result);
+            if (!msg.equals("ok") && !msg.equals("no_result")){
+                Log.e(TAG,"server return error msg:" + record_id_result);
             }
             if (msg.equals("ok")){
+                //有检测结果
                 record_id_url = record_id_json.getString("query_url");
-                if (record_id_url == null || record_id_url == ""){
-                    _safeCallBackFail(cxt,dB,"server return invalid record id result:" + record_id_result, true);
+                if (record_id_url == null || record_id_url.equals("")){
+                    _safeCallBackFail(cxt,dB,"server_error:" + record_id_result, true);
                     return;
                 }
+                _hasSuccessGotResult = true;
             }else if (msg.equals("token_error")){
+                //token有问题
                 _needRefreshToken = true;
-                _safeCallBackFail(cxt,dB,"token is invalid or expired:" + record_id_result, true);
+                _safeCallBackFail(cxt,dB,"token_error", true);
                 return;
             }else {
                 String record_id = record_id_json.getString("record_id");
                 if (msg.equals("no_result") || msg.equals("db_too_low")){
+                    //没有检测结果，可以自动重试
+                    if ((cxt.alwaysAutoRetry || (cxt.firstTimeBoost && !_hasSuccessGotResult) )&& ((System.currentTimeMillis() - cxt.timeStamp) < cxt.timeOut)) {
+                        if (DEBUG){
+                            Log.d(TAG,"Auto retry");
+                        }
+                        Message msg2 = _notifyThread.mHandler.obtainMessage(RETRY, cxt);
+                        msg2.sendToTarget();
+                        return;
+                    }
                     _safeCallBack(cxt,dB, record_id, new Exception("no_result"), true);
                 }else{
+                    //其它问题
                     _safeCallBack(cxt,dB, record_id, new Exception("server_error"), true);
                 }
 
                 return;
             }
         }catch (Exception e){
-            Log.d(TAG,"server return invalid record id result:" + record_id_result);
+            if (DEBUG) {
+                Log.d(TAG, "server return invalid record id result:" + record_id_result);
+            }
             _safeCallBackFail(cxt,dB,"server return invalid record id result" + record_id_result, true);
             return;
         }
 
+        //发送请求给业务服务器查询，detectRequest请自行修改
         String result = null;
         try {
             result = detectRequest(record_id_url, _appKey,_deviceInfo,cxt.customData);
         } catch (Exception e) {
             _safeCallBack(cxt,dB,null, e,true);
         }
-/*
-        if ((cxt.alwaysAutoRetry || (cxt.firstTimeBoost && !_hasSuccessGotResult) )&& ((System.currentTimeMillis() - cxt.timeStamp) < cxt.timeOut)){
-            //check if alltags is empty, and autoretry if not timeout
-            boolean needRetry = true;
 
-            if (jsonResult != null){
-                try{
-                    JSONObject jsonObj = (JSONObject) new JSONTokener(jsonResult).nextValue();
-                    int tagCount = jsonObj.getInt("count");
-                    if (tagCount > 0)  {
-                        _hasSuccessGotResult = true;
-                        needRetry = false;
-                    }
-                } catch (JSONException e) {
-                    e.printStackTrace();
-                }
-            }
-            if (needRetry){
-                if (DEBUG){
-                    Log.d(TAG,"Auto retry");
-                }
-                Message msg = _notifyThread.mHandler.obtainMessage(RETRY, cxt);
-                msg.sendToTarget();
-                return;
-            }
-        }
-*/
         _safeCallBack(cxt,dB,result,null,true);
     }
     /**

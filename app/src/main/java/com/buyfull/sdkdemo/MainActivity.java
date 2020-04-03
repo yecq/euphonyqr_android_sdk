@@ -67,6 +67,12 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override
+    protected void onPause() {
+        BuyfullSDK.getInstance().stop();//退到后台，停止录音，再次启动检测会比较慢
+        super.onPause();
+    }
+
+    @Override
     protected void onDestroy() {
         BuyfullSDK.destory();
         super.onDestroy();
@@ -99,30 +105,47 @@ public class MainActivity extends AppCompatActivity {
         }else{
             JSONObject options = new JSONObject();
             try{
+                //此处只是DEMO, 在BuyfullSDK.java中的detectRequest中发送customData
                 options.put("customData", "anything you want");
                 //以下参数会对检测性能有影响
-//                options.put("alwaysAutoRetry", true);
-                options.put("firstTimeBoost", true);
-//                options.put("stopAfterReturn", true);
+//                options.put("alwaysAutoRetry", true);//是否(一直)在检测不成功时自动重试(直到超时）
+//                options.put("firstTimeBoost", true);//初次检测时，如果检测不成功，会自动重试（仅第一次）
+//                options.put("stopAfterReturn", true);//是否在录音返回后自动停止录音，再次启动检测会比较慢
             }catch (Exception e){}
 
             BuyfullSDK.getInstance().detect(options, new BuyfullSDK.IDetectCallback() {
                 @Override
-                public void onDetect(final JSONObject options, final float dB,final String json,final Exception error) {
+                public void onDetect(final JSONObject options, final float dB,final String result,final Exception error) {
                     if (error != null){
-                        error.printStackTrace();
-                        resultText.setText(error.getLocalizedMessage());
-                    }else if(json == null){
+                        String reason = error.getLocalizedMessage();
+                        if (reason.equals("no_result")) {
+                            //你可以自动重试检测
+                            lastReqID = result;
+                            resultText.setText("No detect result, signal dB is:" + dB);
+                        } else if (reason.equals("token_error")) {
+                            //你可以自动重试检测
+                            resultText.setText("Please fetch token again and retry");
+                        } else if (reason.equals("record_fail")){
+                            //你可以自动重试检测
+                                resultText.setText("Please check recorder and retry");
+                        } else{
+                            //你可以记录下错误再自动重试检测
+                            error.printStackTrace();
+                            resultText.setText(error.getLocalizedMessage());
+                        }
+                    }else if(result == null || result.equals("")){
+                        //你可以自动重试检测
                         resultText.setText("No detect result, signal dB is:" + dB);
                     }else {
-                        Log.d(TAG,json);
+                        //有检测结果，你可以处理后自动重试检测
+                        Log.d(TAG,result);
                         resultText.setText("got result, signal dB is:" + dB);
 
                         try {
-                            JSONObject jsonObj = (JSONObject) new JSONTokener(json).nextValue();
+                            JSONObject jsonObj = (JSONObject) new JSONTokener(result).nextValue();
                             lastReqID = jsonObj.getString("record_id");
                             String msg = jsonObj.getString("msg");
-                            resultText.setText(json);
+                            resultText.setText(result);
                         } catch (JSONException e) {
                             e.printStackTrace();
                         }

@@ -223,7 +223,7 @@ public class BuyfullRecorder {
     private BuyfullRecorder(){
         _tempRecordBuffer = new byte[RECORD_FETCH_FRAMES * 2 * RECORD_BITS / 8];
         _recordBuffer = new byte[230 * 1024];
-        _binBuffer = ByteBuffer.allocate(8 * 1024).order(ByteOrder.LITTLE_ENDIAN);
+        _binBuffer = ByteBuffer.allocate(230 * 1024).order(ByteOrder.LITTLE_ENDIAN);
     }
 
     private void init(){
