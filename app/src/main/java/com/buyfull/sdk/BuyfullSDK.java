@@ -113,65 +113,6 @@ public class BuyfullSDK {
         public boolean              firstTimeBoost = false;//第一次解析是否加速
         public JSONObject           options;
 
-        /**
-         * 此方法为DEMO，请自行修改
-         * 将参数打包后发送检测请求，返回JSON字符串
-         * @param fetchURL          动听返回的URL
-         * @param appkey            动听的APPKEY
-         * @param deviceInfo        设备信息
-         * @param customData        可为空
-         * @return JSON结果
-         */
-        public String detectRequest(String fetchURL, String appkey, String deviceInfo, String customData) throws Exception{
-            if (fetchURL == null || appkey == null || deviceInfo == null){
-                throw new Exception("Please check params");
-            }
-            HttpURLConnection connection = null;
-            Exception error = null;
-            try {
-                String cmd = "?url=" + toURLEncoded(fetchURL) + "&appkey=" + toURLEncoded(appkey) + "&platform=android" + "&device_id=" + toURLEncoded(deviceInfo);
-                if (customData != null){
-                    cmd += ("&customdata=" + toURLEncoded(customData));
-                }
-                URL url = new URL(_detectURL + cmd);
-
-                connection = (HttpURLConnection) url.openConnection();
-                connection.setRequestMethod("GET");
-                connection.setConnectTimeout(1000);
-                connection.setReadTimeout(1000);
-                connection.setDoOutput(false);
-                connection.setDoInput(true);
-                connection.setUseCaches(false);
-                connection.setInstanceFollowRedirects(true);
-                connection.connect();
-
-                int code = connection.getResponseCode();
-                String msg = "";
-                if (code == 200){
-                    BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream()));
-                    String line = null;
-                    while ((line = reader.readLine()) != null) {
-                        msg += line + "\n";
-                    }
-                    reader.close();
-                }
-                connection.disconnect();
-                if (DEBUG)
-                    Log.d(TAG,msg);
-                return msg;
-            }catch (Exception e) {
-                error = e;
-            } finally {
-                if(connection != null) {
-                    connection.disconnect(); //将Http连接关闭掉
-                }
-            }
-            if (error != null)
-                throw error;
-            return null;
-        }
-
-
         public DetectContext(JSONObject _options, IDetectCallback cb){
             callback = cb;
             options = _options;
