@@ -26,7 +26,7 @@ import static android.media.AudioRecord.RECORDSTATE_RECORDING;
 
 public class BuyfullRecorder {
     public static final int NO_ERROR = 0;
-    public static final int DUPLICATE_RECORD = 1;//重复录音
+    public static final int RECORD_STOPED = 1;//结束录音
     public static final int RECORD_FAIL = 2;//录音失败
     public static final int NETWORK_ERROR = 3;//网络错误
     public static final int RECORD_TIMEOUT = 4;//录音超时
@@ -121,12 +121,14 @@ public class BuyfullRecorder {
      */
     public void record(JSONObject options, IRecordCallback callback){
         if (callback == null)   return;
+        _recordStoped = false;
         RecordContext cxt = new RecordContext(options, callback);
         Message msg = _notifyThread.mHandler.obtainMessage(START_RECORD, -1, -1,cxt);
         msg.sendToTarget();
     }
 
     public void stop(){
+        _recordStoped = true;
         Message msg = _notifyThread.mHandler.obtainMessage(STOP_RECORD);
         msg.sendToTarget();
     }
@@ -138,7 +140,7 @@ public class BuyfullRecorder {
     private static final float Pi = 3.14159265358979f;
     private static final int N_WAVE = (64*1024);
     private static final int LOG2_N_WAVE = (6+10);
-    private static final String SDK_VERSION = "1.0.4";
+    private static final String SDK_VERSION = "1.0.5";
 
     private volatile static BuyfullRecorder instance;
     private static float                    fsin[];
@@ -152,6 +154,7 @@ public class BuyfullRecorder {
     private volatile AudioRecord            _recorder;
     private volatile long                   _lastBufferTimeStamp;
     private volatile byte[]                 _lastPCMData;
+    private volatile boolean                _recordStoped;
 
     private static final int START_RECORD = 1;
     private static final int STOP_RECORD = 2;
@@ -176,19 +179,21 @@ public class BuyfullRecorder {
                 public void handleMessage(Message msg) {
                     switch (msg.what){
                         case START_RECORD:
-
                             if (instance != null){
                                 if (!instance._hasTestFinished()){
                                     instance._doTestRecord(msg.arg1,msg.arg2,(RecordContext) msg.obj);
-                                }else{
+                                }else {
                                     instance._doRecord(msg.arg1,msg.arg2,(RecordContext)msg.obj);
                                 }
                             }
                             break;
 
                         case STOP_RECORD:
-                            if (instance != null)
-                                instance._doStop();
+                            if (instance != null){
+                                if (instance._hasTestFinished()) {
+                                    instance._doStop();
+                                }}
+
                             break;
 
                         case START_TEST_RECORD:
@@ -216,14 +221,14 @@ public class BuyfullRecorder {
             };
             threadStarted = true;
             Looper.loop();
-            threadEnded = false;
+            threadEnded = true;
         }
     }
 
     private BuyfullRecorder(){
         _tempRecordBuffer = new byte[RECORD_FETCH_FRAMES * 2 * RECORD_BITS / 8];
         _recordBuffer = new byte[230 * 1024];
-        _binBuffer = ByteBuffer.allocate(230 * 1024).order(ByteOrder.LITTLE_ENDIAN);
+        _binBuffer = ByteBuffer.allocate(8 * 1024).order(ByteOrder.LITTLE_ENDIAN);
     }
 
     private void init(){
@@ -607,6 +612,10 @@ public class BuyfullRecorder {
             _doTestRecord(source, duration, cxt);
             return;
         }
+        if (_recordStoped){
+            _safeRecordCallBack(cxt, DEFAULT_LIMIT_DB, null, RECORD_STOPED, new Exception("record use:" + _lastRecordSource + " record stop"), cxt.stopAfterReturn);
+            return;
+        }
         if (!_hasExpired(cxt)){
             Message msg = _notifyThread.mHandler.obtainMessage(FETCH_BUFFER, cxt);
             msg.sendToTarget();
@@ -741,8 +750,11 @@ public class BuyfullRecorder {
     private void _fetchBuffer(final RecordContext cxt){
         int expectReadSize = _lastRecordExpectSize;
         byte[] result = null;
+        if (_recordStoped){
+            _safeRecordCallBack(cxt, DEFAULT_LIMIT_DB, null, RECORD_STOPED, new Exception("record use:" + _lastRecordSource + " record stop"), cxt.stopAfterReturn);
+            return;
+        }
         synchronized (_recordBuffer) {
-
             if ((_hasExpired(cxt) && isRecording()) || (_lastPCMSize < expectReadSize)) {
 //            Log.d(TAG,"DEBUG1");
                 //if record buffer is out dated or not enough, we should wait or timeout
@@ -756,11 +768,11 @@ public class BuyfullRecorder {
                 }
             }
         }
-            if (!isRecording()) {
+        if (!isRecording() && !_recordStoped) {
 //            Log.d(TAG,"DEBUG2");
-                _doRecord(-1, -1, cxt);
-                return;
-            }
+            _doRecord(-1, -1, cxt);
+            return;
+        }
         synchronized (_recordBuffer) {
 //        Log.d(TAG, "Buffer time stamp: " + _lastBufferTimeStamp);
             result = new byte[expectReadSize];
@@ -775,6 +787,9 @@ public class BuyfullRecorder {
         try {
             dB = getDB(pcm, expectReadSize, DEFAULT_RECORD_SAMPLE_RATE, RECORD_CHANNEL, RECORD_BITS, true);
         } catch (Exception e) {
+            if (DEBUG){
+                e.printStackTrace();
+            }
             _safeRecordCallBack(cxt,dB,null,SIGNAL_DB_TOO_LOW  ,  new Exception("record use:"+ _lastRecordSource + " get dB fail"), cxt.stopAfterReturn);
             return;
         }
@@ -790,6 +805,9 @@ public class BuyfullRecorder {
         try {
             pcmDB_start = getDB(pcm, expectReadSize, DEFAULT_RECORD_SAMPLE_RATE, RECORD_CHANNEL, RECORD_BITS, false);
         } catch (Exception e) {
+            if (DEBUG){
+                e.printStackTrace();
+            }
             _safeRecordCallBack(cxt,dB,null,SIGNAL_DB_TOO_LOW  ,  new Exception("record use:"+ _lastRecordSource + " get dB fail"), cxt.stopAfterReturn);
             return;
         }
@@ -806,7 +824,9 @@ public class BuyfullRecorder {
             try {
                 binData = buildBin(pcm, DEFAULT_RECORD_SAMPLE_RATE, _lastRecordPeriod,RECORD_CHANNEL,RECORD_BITS);
             } catch (Exception e) {
-                e.printStackTrace();
+                if (DEBUG){
+                    e.printStackTrace();
+                }
                 _safeRecordCallBack(cxt,(dB + pcmDB_start) / 2,null,SIGNAL_DB_TOO_LOW  ,  new Exception("record use:"+ _lastRecordSource + " get dB fail"), cxt.stopAfterReturn);
                 return;
             }

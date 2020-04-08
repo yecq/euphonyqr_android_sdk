@@ -32,7 +32,7 @@ import static com.buyfull.sdk.BuyfullRecorder.DEFAULT_RECORD_TIMEOUT;
 public class BuyfullSDK {
     private static final String     TAG = "BUYFULL_SDK";
     private static final boolean    DEBUG = false;
-    private static final String     SDK_VERSION = "1.0.4";
+    private static final String     SDK_VERSION = "1.0.5";
     /**
      * 此方法为DEMO，请自行修改
      * 将参数打包后发送检测请求，返回JSON字符串
@@ -288,6 +288,9 @@ public class BuyfullSDK {
      */
     public void stop(){
         _detectStarted = false;
+        if (DEBUG) {
+            Log.d(TAG, "detect stop");
+        }
         BuyfullRecorder.getInstance().stop();
     }
 
@@ -347,9 +350,16 @@ public class BuyfullSDK {
             if (DEBUG) {
                 error.printStackTrace();
             }
-            _safeCallBackFail(cxt,dB,"record_fail", true);
+            if (error.code == BuyfullRecorder.NO_ERROR || error.code == BuyfullRecorder.RECORD_STOPED) {
+                _safeCallBackFail(cxt, dB, "record_stop", true);
+            }else if (error.code == BuyfullRecorder.SIGNAL_DB_TOO_LOW){
+                _safeCallBackFail(cxt, dB, "no_result", true);
+            }else{
+                _safeCallBackFail(cxt,dB,"record_fail", true);
+            }
             return;
         }
+
         //如果压缩录音返回出错
         if (bin == null){
             _safeCallBackFail(cxt,dB,"record_fail", true);
@@ -358,7 +368,10 @@ public class BuyfullSDK {
         if (DEBUG) {
             Log.d(TAG, "pcm db is " + dB);
         }
-
+        if (!_detectStarted){
+            _safeCallBackFail(cxt,dB,"no_result", true);
+            return;
+        }
         //发送录音检测请求
         String record_id_result = null;
         try {
@@ -370,7 +383,10 @@ public class BuyfullSDK {
             _safeCallBackFail(cxt,dB,"get record id fail", true);
             return;
         }
-
+        if (!_detectStarted){
+            _safeCallBackFail(cxt,dB,"no_result", true);
+            return;
+        }
         //处理录音检测结果
         JSONObject record_id_json = null;
         String record_id_url = null;
@@ -420,7 +436,10 @@ public class BuyfullSDK {
             _safeCallBackFail(cxt,dB,"server return invalid record id result" + record_id_result, true);
             return;
         }
-
+        if (!_detectStarted){
+            _safeCallBackFail(cxt,dB,"no_result", true);
+            return;
+        }
         //发送请求给业务服务器查询，detectRequest请自行修改
         String result = null;
         try {
@@ -718,7 +737,7 @@ public class BuyfullSDK {
         try{
             if (finish){
                 _isDetecting = false;
-                _detectStarted = false;
+
                 if (DEBUG){
                     Log.d(TAG,"Detect use time: " + (System.currentTimeMillis() - cxt.timeStamp));
                 }
@@ -751,7 +770,6 @@ public class BuyfullSDK {
         try{
             if (finish){
                 _isDetecting = false;
-                _detectStarted = false;
                 if (DEBUG){
                     Log.d(TAG,"Detect use time: " + (System.currentTimeMillis() - cxt.timeStamp));
                 }

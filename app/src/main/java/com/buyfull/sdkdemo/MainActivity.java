@@ -68,7 +68,16 @@ public class MainActivity extends AppCompatActivity {
                     resultText.setText("please detect first");
                 }
             }
-        });//检测权限，然后开始录音检测
+        });//上传调试录音
+
+        Button test4 = (Button)findViewById(R.id.button4);
+        test4.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                resultText.setText("stop");
+                BuyfullSDK.getInstance().stop();
+            }
+        });//停止检测
     }
 
     @Override
@@ -127,10 +136,16 @@ public class MainActivity extends AppCompatActivity {
                 public void onDetect(final JSONObject options, final float dB,final String result,final Exception error) {
                     if (error != null){
                         String reason = error.getLocalizedMessage();
-                        if (reason.equals("no_result")) {
-                            //你可以自动重试检测
+                        if (reason.equals("record_stop")){
+                            resultText.setText("recorder stop");
+                        } else if (reason.equals("no_result")) {
                             lastReqID = result;
-                            resultText.setText("No detect result, signal dB is:" + dB);
+                            if (BuyfullSDK.getInstance().isStarted()){
+                                //如果没有检测结果而且也没有结束检测，你可以自动重试检测
+                                doDetect(true);
+                            }else{
+                                resultText.setText("No detect result, signal dB is:" + dB);
+                            }
                         } else if (reason.equals("token_error")) {
                             //你可以自动重试检测
                             resultText.setText("Please fetch token again and retry");
