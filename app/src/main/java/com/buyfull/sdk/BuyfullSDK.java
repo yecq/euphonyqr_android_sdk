@@ -32,7 +32,7 @@ import static com.buyfull.sdk.BuyfullRecorder.DEFAULT_RECORD_TIMEOUT;
 public class BuyfullSDK {
     private static final String     TAG = "BUYFULL_SDK";
     private static final boolean    DEBUG = false;
-    private static final String     SDK_VERSION = "1.0.5";
+    private static final String     SDK_VERSION = "1.0.6";
     /**
      * 此方法为DEMO，请自行修改
      * 将参数打包后发送检测请求，返回JSON字符串
@@ -637,7 +637,7 @@ public class BuyfullSDK {
             };
             threadStarted = true;
             Looper.loop();
-            threadEnded = false;
+            threadEnded = true;
         }
 
         @Override
