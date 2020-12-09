@@ -140,7 +140,7 @@ public class BuyfullRecorder {
     private static final float Pi = 3.14159265358979f;
     private static final int N_WAVE = (64*1024);
     private static final int LOG2_N_WAVE = (6+10);
-    private static final String SDK_VERSION = "1.0.5";
+    private static final String SDK_VERSION = "1.0.8";
 
     private volatile static BuyfullRecorder instance;
     private static float                    fsin[];
@@ -314,7 +314,8 @@ public class BuyfullRecorder {
                 }
             }
         }
-        ByteBuffer pcmByte = ByteBuffer.wrap(pcmData, startIndex, pcmDataSize - startIndex).order(ByteOrder.LITTLE_ENDIAN);
+
+        ByteBuffer pcmByte = ByteBuffer.wrap(pcmData, 0, pcmDataSize).order(ByteOrder.LITTLE_ENDIAN);
 
         boolean allZero = true;
         float[] re = real;
@@ -357,36 +358,37 @@ public class BuyfullRecorder {
             throw (new Exception("invalid pcmData or outBin:"));
         }
         int pcmDataSize = pcmData.length;
-        int stepCount = (sampleRate * recordPeriodInMS) / 1000;
         int stepSize = channels * (bits / 8);
+        int startIndex = 0;
+        int stepCount = (sampleRate * recordPeriodInMS) / 1000;
+        if (recordPeriodInMS < RECORD_PERIOD){
+            throw (new Exception("invalid pcmData length:" + pcmDataSize));
+        }else{
+            stepCount = sampleRate * RECORD_PERIOD / 1000;
+            startIndex = (pcmDataSize - stepCount * stepSize);
+        }
+
         int resultSize = stepCount / 8;
 
         if (_binBuffer.capacity() < (resultSize + 12)){
             throw (new Exception("pcmData is too big"));
         }
         _lastPCMData = pcmData;
-        int startIndex = 0;
         if (!(sampleRate == DEFAULT_RECORD_SAMPLE_RATE)){
             throw (new Exception("invalid sample rate:" + sampleRate));
         }else if (channels < 1 || channels > 2){
             throw (new Exception("invalid channel count:" + channels));
         }else if (!(bits == 16 || bits == 32)){
             throw (new Exception("invalid bit count:" + bits));
-        }else{
-            int minPCMDataSize = stepCount * stepSize;
-            if (pcmDataSize < (sampleRate * stepSize)){
-                throw (new Exception("invalid pcmData length:" + pcmDataSize));
-            }else{
-                startIndex += (pcmDataSize - minPCMDataSize);
-            }
         }
-        ByteBuffer pcmByte = ByteBuffer.wrap(pcmData, startIndex, pcmDataSize - startIndex).order(ByteOrder.LITTLE_ENDIAN);
+
+        ByteBuffer pcmByte = ByteBuffer.wrap(pcmData, 0, pcmDataSize).order(ByteOrder.LITTLE_ENDIAN);
 
         float[] re = real;
         float[] im = imag;
         Arrays.fill(re,0);
         Arrays.fill(im,0);
-        for (int index = 0;index < stepCount;++index,startIndex += stepSize){
+        for (int index = 0;index < stepCount;++index, startIndex += stepSize){
             if (bits == 16){
                 re[index] = (float)(pcmByte.getShort(startIndex)/32768.0);
             }else{
@@ -451,7 +453,7 @@ public class BuyfullRecorder {
             float power_score = 0;
             if (power > 0){
                 power_score = 70;
-            }else if (power < THRESHOLD_DB){
+            }else if (power <= THRESHOLD_DB){
                 power_score = 0;
             }else{
                 power_score = ((-THRESHOLD_DB + power) / -THRESHOLD_DB) * 70;
@@ -790,14 +792,14 @@ public class BuyfullRecorder {
             if (DEBUG){
                 e.printStackTrace();
             }
-            _safeRecordCallBack(cxt,dB,null,SIGNAL_DB_TOO_LOW  ,  new Exception("record use:"+ _lastRecordSource + " get dB fail"), cxt.stopAfterReturn);
+            _safeRecordCallBack(cxt,dB,null,SIGNAL_DB_TOO_LOW  ,  new Exception("record use:"+ _lastRecordSource + " get dB fail"), true);
             return;
         }
         if (dB == THRESHOLD_DB){
             _safeRecordCallBack(cxt,dB,null,NO_RECORD_PERMISSION  ,  new Exception("record use:"+ _lastRecordSource + " get dB fail"), true);
             return;
         }else if (dB < cxt.limitDB){
-            _safeRecordCallBack(cxt,dB,null,SIGNAL_DB_TOO_LOW  ,  new Exception("record use:"+ _lastRecordSource + " get dB fail"), cxt.stopAfterReturn);
+            _safeRecordCallBack(cxt,dB,null,SIGNAL_DB_TOO_LOW  ,  new Exception("record use:"+ _lastRecordSource + " get dB fail"), true);
             return;
         }
 
@@ -808,14 +810,14 @@ public class BuyfullRecorder {
             if (DEBUG){
                 e.printStackTrace();
             }
-            _safeRecordCallBack(cxt,dB,null,SIGNAL_DB_TOO_LOW  ,  new Exception("record use:"+ _lastRecordSource + " get dB fail"), cxt.stopAfterReturn);
+            _safeRecordCallBack(cxt,dB,null,SIGNAL_DB_TOO_LOW  ,  new Exception("record use:"+ _lastRecordSource + " get dB fail"), true);
             return;
         }
         if (pcmDB_start == THRESHOLD_DB){
             _safeRecordCallBack(cxt,pcmDB_start,null,NO_RECORD_PERMISSION  ,  new Exception("record use:"+ _lastRecordSource + " get dB fail"), true);
             return;
         }else if (pcmDB_start < cxt.limitDB){
-            _safeRecordCallBack(cxt,pcmDB_start,null,SIGNAL_DB_TOO_LOW  ,  new Exception("record use:"+ _lastRecordSource + " get dB fail"), cxt.stopAfterReturn);
+            _safeRecordCallBack(cxt,pcmDB_start,null,SIGNAL_DB_TOO_LOW  ,  new Exception("record use:"+ _lastRecordSource + " get dB fail"), true);
             return;
         }
 
@@ -827,7 +829,7 @@ public class BuyfullRecorder {
                 if (DEBUG){
                     e.printStackTrace();
                 }
-                _safeRecordCallBack(cxt,(dB + pcmDB_start) / 2,null,SIGNAL_DB_TOO_LOW  ,  new Exception("record use:"+ _lastRecordSource + " get dB fail"), cxt.stopAfterReturn);
+                _safeRecordCallBack(cxt,(dB + pcmDB_start) / 2,null,SIGNAL_DB_TOO_LOW  ,  new Exception("record use:"+ _lastRecordSource + " get dB fail"), true);
                 return;
             }
         }
@@ -850,6 +852,7 @@ public class BuyfullRecorder {
         }
         RecordConfig config = _recordConfigs[recordIndex];
         AudioRecord record = null;
+
         try{
             record = new AudioRecord(audioSource, _preferSampleRate,AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT, 10 *1024);
             if (record.getState() != AudioRecord.STATE_INITIALIZED){
@@ -857,12 +860,12 @@ public class BuyfullRecorder {
                 _record(source, duration, cxt);
                 return;
             }
+
         }catch (Exception e){
             _setTestResult(THRESHOLD_DELAY,THRESHOLD_DB,true);
             _record(source, duration, cxt);
             return;
         }
-
 
         int realSampleRate = record.getSampleRate();
         if (realSampleRate != _preferSampleRate){
@@ -937,7 +940,7 @@ public class BuyfullRecorder {
             _setTestResult(THRESHOLD_DELAY,THRESHOLD_DB,true);
         }else{
             lastDB = totalDB / dBCount;
-            _setTestResult(loudestDBOffset * 1000 / realSampleRate,lastDB,false);
+            _setTestResult(loudestDBOffset * 1000 / realSampleRate,lastDB > loudestDB? lastDB : loudestDB,false);
         }
         _record(source, duration, cxt);
     }
@@ -956,6 +959,10 @@ public class BuyfullRecorder {
         _recordConfigs[_recordTestIndex].delayTime = delayTime;
         _recordConfigs[_recordTestIndex].power = power;
         _recordConfigs[_recordTestIndex].duration = RECORD_PERIOD + ((delayTime * 100) / 100);
+
+        if (power <= THRESHOLD_DB)
+            hasFailed = true;
+
         if (hasFailed)
             ++_recordConfigs[_recordTestIndex].hasFailed;
         else
