@@ -20,6 +20,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 
 import static android.media.AudioRecord.RECORDSTATE_RECORDING;
@@ -140,7 +141,7 @@ public class BuyfullRecorder {
     private static final float Pi = 3.14159265358979f;
     private static final int N_WAVE = (64*1024);
     private static final int LOG2_N_WAVE = (6+10);
-    private static final String SDK_VERSION = "1.0.8";
+    private static final String SDK_VERSION = "1.1.0";
 
     private volatile static BuyfullRecorder instance;
     private static float                    fsin[];
@@ -149,7 +150,11 @@ public class BuyfullRecorder {
     private LooperThread                    _notifyThread;
     private LooperThread                    _recordThread;
     private volatile byte[]                 _recordBuffer;
-    private volatile byte[]                 _tempRecordBuffer;
+    private static class RecordData{
+        public byte[] data;
+        public long timeStamp;
+    }
+    private ConcurrentLinkedQueue<RecordData>   _tempRecordBuffer;
     private ByteBuffer                      _binBuffer;
     private volatile AudioRecord            _recorder;
     private volatile long                   _lastBufferTimeStamp;
@@ -213,8 +218,10 @@ public class BuyfullRecorder {
                                 instance._updateBuffer(instance._recorder);
                             }
                             break;
+
                         case DESTORY:
                         default:
+                            threadEnded = true;
                             Looper.myLooper().quit();
                     }
                 }
@@ -226,7 +233,7 @@ public class BuyfullRecorder {
     }
 
     private BuyfullRecorder(){
-        _tempRecordBuffer = new byte[RECORD_FETCH_FRAMES * 2 * RECORD_BITS / 8];
+        _tempRecordBuffer = new ConcurrentLinkedQueue<RecordData>();
         _recordBuffer = new byte[230 * 1024];
         _binBuffer = ByteBuffer.allocate(8 * 1024).order(ByteOrder.LITTLE_ENDIAN);
     }
@@ -242,6 +249,7 @@ public class BuyfullRecorder {
         _notifyThread.start();
 
         _recordThread = new LooperThread("BuyfullRecorder2");
+        _recordThread.setPriority(Thread.MAX_PRIORITY);
         _recordThread.start();
 
         while (!(_notifyThread.threadStarted && _recordThread.threadStarted))
@@ -687,66 +695,77 @@ public class BuyfullRecorder {
                 return;
             }
 
-            synchronized (_recordBuffer) {
-                _lastRecordStartTime = System.currentTimeMillis();
-                _lastRecordSource = config.tag;
-                _lastRecordPeriod = recordPeriod;
-                _lastPCMSize = 0;
-                int expectReadSize = (realSampleRate * recordPeriod * (RECORD_BITS / 8)) / 1000;
-                if ((expectReadSize % 2) == 1)
-                    --expectReadSize;
-                _lastRecordExpectSize = expectReadSize;
-            }
+            _lastRecordStartTime = System.currentTimeMillis();
+            _lastRecordSource = config.tag;
+            _lastRecordPeriod = recordPeriod;
+            _lastPCMSize = 0;
+            int expectReadSize = (realSampleRate * recordPeriod * (RECORD_BITS / 8)) / 1000;
+            if ((expectReadSize % 2) == 1)
+                --expectReadSize;
+            _lastRecordExpectSize = expectReadSize;
         }
         Message msg = _notifyThread.mHandler.obtainMessage(FETCH_BUFFER, cxt);
         _notifyThread.mHandler.sendMessageDelayed(msg,DEFAULT_VALID_TIME_PERIOD);
     }
 
     private void _updateBuffer(AudioRecord record){
-        if (!isRecording()){
-            if (DEBUG)
-                Log.d("audio rec", "audio recorder update buffer empty return");
-            Message msg = _recordThread.mHandler.obtainMessage(UPDATE_BUFFER);
-            _recordThread.mHandler.sendMessageDelayed(msg, 1000);
-            return;
-        }
-
-        int expect_size = (int)(RECORD_FETCH_FRAMES * RECORD_BITS / 8);
-
-        int readSize = 0;
-        try {
-            long now = System.nanoTime();
-            readSize = record.read(_tempRecordBuffer, 0, expect_size);
-            if (readSize < 0){
-                //error
-                _doStop();
+        LooperThread thisThread = (LooperThread)Thread.currentThread();
+        byte[] _recordBuffer = new byte[RECORD_FETCH_FRAMES * 2 * RECORD_BITS / 8];
+        while(!thisThread.threadEnded){
+            if (!isRecording() || record == null){
+                if (DEBUG)
+                    Log.d("audio rec", "audio recorder update buffer empty return");
+                Message msg = _recordThread.mHandler.obtainMessage(UPDATE_BUFFER);
+                _recordThread.mHandler.sendMessageDelayed(msg, 1000);
                 return;
             }
 
-        }catch (Exception e){
-            e.printStackTrace();
-            _doStop();
-            return;
-        }
+            int expect_size = (int)(RECORD_FETCH_FRAMES * RECORD_BITS / 8);
 
-        long timeStamp = System.currentTimeMillis();
-        synchronized (_recordBuffer){
-            _lastBufferTimeStamp = timeStamp;
-            if ((_lastPCMSize + readSize) >= _recordBuffer.length){
-                //trim last half pcm data
-                int leftSize = _recordBuffer.length / 2 - readSize;
+            int readSize = 0;
+            try {
+                long now = System.nanoTime();
+                readSize = record.read(_recordBuffer, 0, expect_size);
+                if (readSize < 0){
+                    //error
+                    _doStop();
+                    Message msg = _recordThread.mHandler.obtainMessage(UPDATE_BUFFER);
+                    _recordThread.mHandler.sendMessageDelayed(msg, 1000);
+                    return;
+                }
 
-//            Log.d(TAG,"update frames overflow, trim to left size: " + leftSize);
-
-                System.arraycopy(_recordBuffer,_lastPCMSize - leftSize,_recordBuffer,0,leftSize);
-                _lastPCMSize = leftSize;
+            }catch (Exception e){
+                e.printStackTrace();
+                _doStop();
+                Message msg = _recordThread.mHandler.obtainMessage(UPDATE_BUFFER);
+                _recordThread.mHandler.sendMessageDelayed(msg, 1000);
+                return;
             }
-            //copy temp buffer to record buffer
-            System.arraycopy(_tempRecordBuffer,0,_recordBuffer,_lastPCMSize,readSize);
-            _lastPCMSize += readSize;
+
+
+            RecordData recordData = new RecordData();
+            recordData.data = new byte[readSize];
+            recordData.timeStamp = System.currentTimeMillis();
+            System.arraycopy(_recordBuffer,0, recordData.data,0, readSize);
+            if (_tempRecordBuffer.size() > 15){
+                _tempRecordBuffer.poll();
+            }
+            _tempRecordBuffer.add(recordData);
         }
-        Message msg = _recordThread.mHandler.obtainMessage(UPDATE_BUFFER);
-        _recordThread.mHandler.sendMessage(msg);
+    }
+
+    private void _mergeBuffer(RecordData recordData){
+        int readSize = recordData.data.length;
+
+        _lastBufferTimeStamp = recordData.timeStamp;
+        if ((_lastPCMSize + readSize) >= _recordBuffer.length) {
+            //trim last half pcm data
+            int leftSize = _recordBuffer.length / 2 - readSize;
+            System.arraycopy(_recordBuffer, _lastPCMSize - leftSize, _recordBuffer, 0, leftSize);
+            _lastPCMSize = leftSize;
+        }
+        System.arraycopy(recordData.data,0,_recordBuffer,_lastPCMSize,readSize);
+        _lastPCMSize += readSize;
     }
 
     private void _fetchBuffer(final RecordContext cxt){
@@ -756,30 +775,38 @@ public class BuyfullRecorder {
             _safeRecordCallBack(cxt, DEFAULT_LIMIT_DB, null, RECORD_STOPED, new Exception("record use:" + _lastRecordSource + " record stop"), cxt.stopAfterReturn);
             return;
         }
-        synchronized (_recordBuffer) {
-            if ((_hasExpired(cxt) && isRecording()) || (_lastPCMSize < expectReadSize)) {
-//            Log.d(TAG,"DEBUG1");
-                //if record buffer is out dated or not enough, we should wait or timeout
-                if ((System.currentTimeMillis() - cxt.timeStamp) > cxt.timeOut) {
-                    _safeRecordCallBack(cxt, DEFAULT_LIMIT_DB, null, RECORD_TIMEOUT, new Exception("record use:" + _lastRecordSource + " record time out"), cxt.stopAfterReturn);
-                    return;
-                } else {
-                    Message msg = _notifyThread.mHandler.obtainMessage(FETCH_BUFFER, cxt);
-                    _notifyThread.mHandler.sendMessageDelayed(msg, DEFAULT_VALID_TIME_PERIOD / 5);
-                    return;
-                }
+        Object[] datas = _tempRecordBuffer.toArray();
+
+        for (int index = 0;index < datas.length;++index){
+            RecordData data = (RecordData)datas[index];
+            if (data.timeStamp <= _lastBufferTimeStamp){
+                continue;
+            }
+            _mergeBuffer(data);
+        }
+
+        if ((_hasExpired(cxt) && isRecording()) || (_lastPCMSize < expectReadSize)) {
+            //if record buffer is out dated or not enough, we should wait or timeout
+            if ((System.currentTimeMillis() - cxt.timeStamp) > cxt.timeOut) {
+                _safeRecordCallBack(cxt, DEFAULT_LIMIT_DB, null, RECORD_TIMEOUT, new Exception("record use:" + _lastRecordSource + " record time out"), cxt.stopAfterReturn);
+                return;
+            } else {
+                Message msg = _notifyThread.mHandler.obtainMessage(FETCH_BUFFER, cxt);
+                _notifyThread.mHandler.sendMessageDelayed(msg, DEFAULT_VALID_TIME_PERIOD / 5);
+                return;
             }
         }
+
         if (!isRecording() && !_recordStoped) {
 //            Log.d(TAG,"DEBUG2");
             _doRecord(-1, -1, cxt);
             return;
         }
-        synchronized (_recordBuffer) {
+
 //        Log.d(TAG, "Buffer time stamp: " + _lastBufferTimeStamp);
-            result = new byte[expectReadSize];
-            System.arraycopy(_recordBuffer, _lastPCMSize - expectReadSize, result, 0, expectReadSize);
-        }
+        result = new byte[expectReadSize];
+        System.arraycopy(_recordBuffer, _lastPCMSize - expectReadSize, result, 0, expectReadSize);
+
         _processAndReturn(cxt, result);
     }
 
