@@ -141,7 +141,7 @@ public class BuyfullRecorder {
     private static final float Pi = 3.14159265358979f;
     private static final int N_WAVE = (64*1024);
     private static final int LOG2_N_WAVE = (6+10);
-    private static final String SDK_VERSION = "1.1.0";
+    private static final String SDK_VERSION = "1.1.1";
 
     private volatile static BuyfullRecorder instance;
     private static float                    fsin[];
@@ -626,7 +626,7 @@ public class BuyfullRecorder {
             _safeRecordCallBack(cxt, DEFAULT_LIMIT_DB, null, RECORD_STOPED, new Exception("record use:" + _lastRecordSource + " record stop"), cxt.stopAfterReturn);
             return;
         }
-        if (!_hasExpired(cxt)){
+        if (!_hasExpired(cxt) || isRecording()){
             Message msg = _notifyThread.mHandler.obtainMessage(FETCH_BUFFER, cxt);
             msg.sendToTarget();
             return;
