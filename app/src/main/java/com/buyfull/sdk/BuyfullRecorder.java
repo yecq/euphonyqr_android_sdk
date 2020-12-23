@@ -142,7 +142,7 @@ public class BuyfullRecorder {
     private static final float Pi = 3.14159265358979f;
     private static final int N_WAVE = (64*1024);
     private static final int LOG2_N_WAVE = (6+10);
-    private static final String SDK_VERSION = "1.1.0";
+    private static final String SDK_VERSION = "1.1.2";
 
     private volatile static BuyfullRecorder instance;
     private static float                    fsin[];
@@ -747,7 +747,6 @@ public class BuyfullRecorder {
             return;
         }
 
-//        Log.d(TAG, "read size: " + readSize);
         RecordData recordData = new RecordData();
         recordData.data = new byte[readSize];
         recordData.timeStamp = System.currentTimeMillis();
@@ -795,6 +794,7 @@ public class BuyfullRecorder {
         if ((_hasExpired(cxt) && isRecording()) || (_lastPCMSize < expectReadSize)) {
             //if record buffer is out dated or not enough, we should wait or timeout
             if ((System.currentTimeMillis() - cxt.timeStamp) > cxt.timeOut) {
+                _doStop();
                 _safeRecordCallBack(cxt, DEFAULT_LIMIT_DB, null, RECORD_TIMEOUT, new Exception("record use:" + _lastRecordSource + " record time out"), cxt.stopAfterReturn);
                 return;
             } else {
